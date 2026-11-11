@@ -1,4 +1,4 @@
-# RTT modernisation plan (C++17 core, C++23 opt-in)
+# RTT modernisation plan (C++17 core, C++23 and C++26 opt-in)
 
 Status: proposal for a new fork. Scope is the C++ API only; the CORBA transport
 and the Python and Lua bindings are out of scope and are not carried forward.
@@ -7,7 +7,7 @@ and the Python and Lua bindings are out of scope and are not carried forward.
 
 | Topic | Decision |
 |---|---|
-| Language baseline | The library builds as C++17. C++20/23 features live in an additive header layer that switches on when the consumer compiles with a newer standard. |
+| Language baseline | The library builds as C++17. C++20/23 features live in an additive header layer that switches on when the consumer compiles with a newer standard. C++26 reflection is a further header-only tier, GCC 16 only for now. |
 | Introspection | The typed core carries no names and no `TypeInfo`. Names, by-name lookup, properties, marshalling and scripting become an opt-in library layered on the core. |
 | Deployment | Static first: a deployment is described in C++ and checked and wired by the compiler. Runtime loading (`ComponentLoader`, `PluginLoader`) stays as an optional module. |
 | OS targets | Keep a pluggable OS layer, expressed as a C++ trait instead of the `fosi` C macros, so RTOS and bare-metal backends can be added. Linux is the reference backend. |
@@ -90,8 +90,10 @@ rtt-scripting   program and state machine scripts (depends on rtt-reflect)
   modules no longer needed, `configure`, `manifest.xml`, catkin and
   `env-hooks`, `.travis.yml`, `UseOROCOS-RTT*.cmake` (replace with a small
   config package and an `rtt_add_component()` helper).
-- CI on GitHub Actions: GCC 9 (C++17 floor) and GCC 13+/Clang 17+ (C++23),
-  with ASan, UBSan and TSan jobs. TSan matters because the lock-free code is
+- CI on GitHub Actions: GCC 9 (C++17 floor), GCC 13+/Clang 17+ (C++23) and
+  GCC 16 with `-std=c++26 -freflection` (4.8), with ASan, UBSan and TSan
+  jobs. GCC 16 defaults to `-std=gnu++20`, so the standard is always set
+  explicitly. TSan matters because the lock-free code is
   being rewritten.
 - Tests: move off Boost.Test to Catch2 or GoogleTest (see open questions).
   Port the tests before touching the code they cover; the 96-file suite is
@@ -199,8 +201,8 @@ rtt::connect(ctrl.command, driver.command_in, rtt::policy::data{});   // T misma
   inlined. `ConnPolicy` as a runtime struct remains in `rtt-reflect`.
 - Port enumeration without macros: C++17 uses an explicit
   `static constexpr auto ports = rtt::ports(&Controller::state, &Controller::command);`
-  list. This is the one piece of boilerplate; C++26 reflection can remove it
-  later without an API change.
+  list. This is the one piece of boilerplate; the C++26 reflection tier
+  (4.8) removes it without an API change.
 - Names are attached outside the object, in `rtt-reflect`, as a constexpr
   table of `{string_view, member pointer}` per component type. The classic
   `getPort("state")` is a lookup in that table, and a statically deployed
@@ -306,6 +308,166 @@ Added when the consumer's standard allows it, never required:
   callables; `SendHandle` kept in the classic layer.
 - `Signal`/`Handle` reduce to what event ports need.
 
+### 4.8 C++26 reflection layer (GCC 16)
+
+A third opt-in tier above the C++23 layer. It removes the remaining
+boilerplate of the typed API (port lists, name tables, argument
+descriptions, typekits) by generating them from the declarations.
+
+**What GCC 16 provides.** Reflection is experimental and off by default; it
+needs `-std=c++26 -freflection` and the `<meta>` header. Status below is
+taken from the GCC 16 release notes and the cppreference support table; it
+has not been compile-tested here, because this plan was written on a
+machine with GCC 13 only.
+
+| Paper | Feature | Use in this fork |
+|---|---|---|
+| P2996R13 | `^^` operator, splicers `[: :]`, `std::meta::info`, `<meta>` queries | Everything below |
+| P3394R4 | Annotations, `[[=value]]` | Port, operation and property metadata |
+| P3096R12 | Function parameter reflection | Operation argument names and types |
+| P3293R3 | Splicing a base class subobject | Typekits for derived structs |
+| P3491R3 | `define_static_string`, `define_static_object`, `define_static_array` | Moving generated tables into static storage |
+| P3795R2 | Reflection clean-ups | - |
+| P1306 | Expansion statements, `template for` (experimental) | Iterating members without recursive templates |
+
+To confirm on a real GCC 16 before design freeze: P3560 (exceptions as the
+error model of `std::meta` functions) and P3068 (constexpr exceptions) were
+not confirmed by the sources available, and they decide how reflection
+errors surface as diagnostics. Mainline Clang and MSVC are reported to have
+no P2996 support yet, so for now this tier is GCC only.
+
+**Gating rules.**
+
+- Enabled only when `__cpp_impl_reflection` and `__cpp_lib_reflection` are
+  defined. No other macro or configure switch.
+- Header-only, in its own directory (`rtt/meta/`). The built libraries never
+  contain or depend on reflection, so one binary of `rtt-core` and
+  `rtt-reflect` serves C++17, C++23 and C++26 consumers.
+- Reflection is a second *producer* of the same constexpr tables the C++17
+  API fills by hand (4.4). It adds no new runtime data structure. Every
+  feature below therefore has a C++17 spelling, and CI checks that both
+  spellings yield identical tables for the same component.
+- `<meta>` is included only from `rtt/meta/` headers, because of its compile
+  time cost; phase 0 benchmarks track it.
+
+**4.8.1 Port discovery.** The explicit list
+`static constexpr auto ports = rtt::ports(&Controller::state, ...)` becomes
+optional. `rtt::meta::ports_of<T>()` walks
+`nonstatic_data_members_of(^^T, ctx)`, keeps members whose type is a
+specialisation of `rtt::input_port` or `rtt::output_port` (`template_of`,
+`template_arguments_of`), and returns member pointers through splices:
+
+```cpp
+struct Controller : rtt::component<Controller> {
+    rtt::input_port<JointState>    state;     // found by reflection
+    rtt::output_port<JointCommand> command;
+    void update();
+};
+```
+
+If a component declares both an explicit list and is reflected, the
+explicit list wins, which lets a component hide a port from discovery.
+
+**4.8.2 Names without strings in the object.** `identifier_of(member)`
+supplies the port name; `define_static_string` places it in read-only
+storage and the name table holds a `string_view` to it. This replaces both
+the C++17 `{name, member pointer}` table and the C++23
+`rtt::named<"state", &Controller::state>` form, and the compile-time hash
+used for runtime identifiers (4.4) is computed from the same identifier.
+The classic `getPort("state")` keeps working through `rtt-reflect` with no
+registration code written by the user.
+
+**4.8.3 Annotations for metadata.** Metadata that today is set by runtime
+calls (`.doc("...")`, `addEventPort`, `addOperation(...).arg(...)`,
+`OwnThread`) becomes constant annotations read with `annotations_of`:
+
+```cpp
+struct Driver : rtt::component<Driver> {
+    [[=rtt::doc("Joint command"), =rtt::event]]
+    rtt::input_port<JointCommand> command_in;
+
+    [[=rtt::property, =rtt::doc("Maximum velocity"), =rtt::unit("rad/s")]]
+    double max_velocity = 1.0;
+
+    [[=rtt::operation(rtt::own_thread), =rtt::doc("Clear a latched fault")]]
+    bool reset(int axis);
+
+    [[=rtt::name("status")]]             // override the identifier
+    rtt::output_port<Status> status_out;
+};
+```
+
+- Ports: `rtt::event`, `rtt::required`, `rtt::doc`, `rtt::name`, and a
+  default policy (`rtt::policy::buffer<8>`).
+- Properties: annotated data members form the property set; the `.cpf`
+  marshaller in `rtt-reflect` iterates them.
+- Operations: annotated member functions. `parameters_of` gives argument
+  types and names, replacing `ArgumentDescription` and the hand-written
+  `.arg("axis", "...")` chain. A parameter has a usable name only when all
+  declarations of the function agree on it; where they do not, the table
+  falls back to `arg0`, `arg1`, as the classic API does.
+- Annotation types are plain structural types in `rtt-core`, so they
+  compile as ordinary (unused) types under C++17/23; only the `[[=...]]`
+  syntax is C++26. Shared headers can wrap them in an `RTT_ANNOTATE(...)`
+  macro that expands to nothing on older standards, with the explicit
+  tables supplying the same data there.
+
+**4.8.4 Typekits from reflection.** For aggregate data types, structure
+decomposition (member names, member types, bases via `bases_of`, enum
+value names via `enumerators_of`) is generated in `rtt-reflect` from the
+type alone. This covers what Boost.Serialization `serialize()` functions
+and typegen-generated typekits do today for plain structs and enums, and
+is the recommended long-term answer to open question 3. Hand-written
+typekits remain for types that are not aggregates or need a custom view.
+
+**4.8.5 Deployment described as a struct.** The `rtt::deployment<...>` type
+list (4.5) gains an equivalent where nodes are data members:
+
+```cpp
+struct App {
+    [[=rtt::periodic(1ms), =rtt::priority(80)]] Sensor     sensor;
+    [[=rtt::periodic(1ms), =rtt::priority(79)]] Controller ctrl;
+    [[=rtt::triggered_by(&Driver::command_in)]] Driver     left, right;
+
+    static constexpr auto links = rtt::links(
+        rtt::link(&App::sensor, &Sensor::state,       &App::ctrl,  &Controller::state),
+        rtt::link(&App::ctrl,   &Controller::command, &App::left,  &Driver::command_in),
+        rtt::link(&App::ctrl,   &Controller::command, &App::right, &Driver::command_in));
+};
+
+int main() { return rtt::run<App>(); }
+```
+
+- Instances are identified by their data member, which gives multiple
+  instances of one component type without the `rtt::tag` mechanism.
+- The same validation, scheduling fold and start-up ordering as 4.5 run
+  over the reflected members. Iteration uses `template for` where it is
+  reliable, which replaces recursive template instantiation and should
+  lower compile time on large deployments.
+- Diagnostics improve: checks can build messages from identifiers
+  ("input `App::right.command_in` has no writer") using constexpr
+  `static_assert` messages.
+- Optional `rtt::autowire<App>`: connect outputs to inputs whose name and
+  value type both match, with ambiguity being a compile error. Off by
+  default; explicit links stay the norm.
+- `rtt::reflect::expose(app)` (4.5) needs no per-component registration,
+  since names come from 4.8.2.
+
+**Not planned.** `define_aggregate` (generating new class types, for
+example message structs or structure-of-arrays buffers) is left out until
+there is a concrete need; generated types are hard to debug and document.
+Contracts, also experimental in GCC 16, are a separate topic from this
+tier.
+
+**Risks specific to this tier.** The feature is behind an experimental
+flag in one compiler, and behaviour may change in GCC 16.x point releases
+and GCC 17. Hence the strict rule that it only produces tables the C++17
+API can also produce: if the tier has to be withdrawn or reworked, no
+component loses functionality, only convenience. Private members need
+`std::meta::access_context::unchecked()`; the plan is to reflect public
+members only by default and require a friend declaration or explicit list
+for private ports.
+
 ## 5. Phasing
 
 Each phase ends with the full test suite green on the C++17 and C++23 jobs.
@@ -321,7 +483,8 @@ Each phase ends with the full test suite green on the C++17 and C++23 jobs.
 | 6. Static deployment | `rtt::deployment`, validation, scheduling fold, `expose` bridge | Example system runs with zero allocations after `main` starts and no string lookups |
 | 7. Typed operations, properties, services | Same pattern as ports | Classic layer fully implemented on the typed core |
 | 8. C++23 layer | Concepts, `expected`, deducing `this`, named NTTPs | Same examples written both ways produce equivalent binaries |
-| 9. Release | Migration guide, deprecation attributes on classic calls that have typed equivalents, API and ABI policy | Tagged 3.0 |
+| 9. C++26 reflection | `rtt/meta/` tier on GCC 16: port discovery, names, annotations, reflected typekits, struct deployments | Reflected and hand-written tables identical in CI; tier can be disabled with no loss of function |
+| 10. Release | Migration guide, deprecation attributes on classic calls that have typed equivalents, API and ABI policy | Tagged 3.0 |
 
 Phases 1 to 3 are low-risk and independent of the design questions below.
 Phases 4 to 7 depend on them.
@@ -380,3 +543,10 @@ Phases 4 to 7 depend on them.
     test-only dependency to avoid porting 96 files?
 12. **XML properties**: keep `.cpf` with the vendored TinyXML, move to
     TinyXML-2/pugixml, or change format?
+13. **Reflection tier ambition**: should C++26 reflection stay a pure
+    convenience over the C++17 tables (as planned in 4.8), or may some
+    features, such as reflected typekits, exist only there? The second
+    option is simpler to build but ties those features to GCC 16+.
+14. **Annotations in shared headers**: is an `RTT_ANNOTATE(...)` macro
+    acceptable in component headers that must also compile as C++17, or
+    should annotated components be C++26 only?
