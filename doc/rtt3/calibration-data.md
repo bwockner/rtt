@@ -685,6 +685,56 @@ observability report answers for the actual numbers.
 - Record the slew sensor and the base inertial unit throughout, so that
   unnoticed changes can be found and located afterwards.
 
+## Single-joint sweeps
+
+A sweep (one joint moved alone, with a tracked prism and the inertial
+units recording) is described in `estimation.md`. As data it is one more
+"nothing else moved" assumption, between the slew epoch and the pose
+group, together with two series.
+
+```cpp
+namespace cal {
+
+using sweep_id = id<struct sweep_tag>;
+using joint_id = id<struct joint_tag>;
+
+struct single_axis_motion {           // "only this joint moved, about one fixed axis"
+    sweep_id      id;
+    slew_epoch_id within;
+    joint_id      moving;
+    time_range    span;
+    bool          both_directions;    // needed to separate play and instrument timing from geometry
+
+    // Evidence, filled in when the recordings are examined.
+    double rate_direction_scatter;    // spread of the gyroscope rate direction, radians
+    double held_joint_motion;         // largest relative rotation seen at joints meant to be held
+    double base_tilt_change;          // from the base inertial unit
+    double out_of_plane_residual;     // of the tracked points about their fitted plane, metres
+};
+
+struct ts_track_series {              // a tracking stream, not thousands of single records
+    sweep_id   during;
+    setup_id   from;
+    target_id  to;
+    sample_ref samples;               // file and range: angles, distance, time stamp, lock flag per sample
+    time_offset_id clock;             // the instrument's time offset, shared by all its series
+};
+
+struct inertial_series {              // the on-board recording covering the sweep
+    sweep_id      during;
+    recording_ref recording;
+    time_range    still_before, still_after;   // for the bias
+};
+
+}
+```
+
+The sweep owns one unknown, the joint's axis as a line, shared by every
+sample of both series. Its evidence fields are what decide whether the
+single-axis assumption held. A sweep that fails them is marked suspect
+as a unit; if the failure can be localised in time (a held joint started
+to creep half-way), the sweep is split like any other level.
+
 ## How the records become factors
 
 `std::visit` over the payload selects the residual function for that

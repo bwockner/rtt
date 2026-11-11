@@ -2211,6 +2211,104 @@ within the uncertainty the field procedure reports. Once that holds
 across machines and repeated trials, the reported uncertainty of the
 field procedure can be relied on without the instrument present.
 
+**Single-joint motion: a tracked prism's point cloud and the gyroscope
+axis.** The owner's intended procedure, as understood here: move one
+joint alone while the total station tracks a prism outboard of it and
+the inertial units record, and assume that the motion is a rotation
+about one fixed axis. In robot calibration this is known as circle-point
+analysis, and it suits this machine and this instrument particularly
+well.
+
+*What each data stream gives under the single-axis assumption.*
+
+- The prism's positions lie on a circle. The circle's plane gives the
+  direction of the joint axis in the instrument's frame, its centre
+  gives a point on the axis, and its radius gives the prism's distance
+  from the axis.
+- Every inertial unit outboard of the moving joint sees an angular
+  velocity along that same axis. The direction of the measured rate,
+  averaged with weight on the faster samples and after removing the
+  bias found from the still periods before and after, is the joint axis
+  in that unit's own frame. One sweep therefore gives two of the three
+  mounting angles of every unit beyond the joint.
+- Together they express one physical axis in the instrument's frame and
+  in each sensor's frame, which ties the two.
+
+*Why it suits a tracking instrument with latency.* A delay in the
+tracked positions moves each point along its path. On a circle that is
+a shift along the circle: the plane, the centre and the radius are
+unaffected to first order. So the geometry is recovered correctly even
+before the instrument's time offset is known, which is exactly the
+situation in the field. What latency does affect is the pairing of
+position with time; see the time-offset point below. The exception is a
+difference in timing between the instrument's angle and distance
+readings, which moves points off the circle in a direction that depends
+on the direction of travel. Sweeping the joint both ways makes that
+error reverse, so it can be recognised, averaged out or estimated.
+
+*What a sweep in each direction also provides.*
+
+- *The instrument's time offset.* The angle travelled along the arc,
+  against time, is compared with the angle obtained by integrating the
+  gyroscope. The shift that aligns them is the offset.
+- *Gyroscope scale factor.* The total arc angle from the instrument is
+  an independent angle reference; its ratio to the integrated rate is
+  the scale factor about that axis.
+- *Backlash and compliance.* A consistent gap between the forward and
+  the return circle is play in the joint. A radius or plane that varies
+  smoothly with the joint angle is deflection under the changing
+  gravity load.
+- *The plane heading* of the current slew epoch, since for the hinge
+  joints the axis is the normal of the plane of motion
+  (`calibration-data.md`).
+
+*From axes to the mechanism.* Doing this for each joint in turn gives
+every joint axis as a line in the instrument's frame, in one slew epoch.
+The distances and angles between consecutive axes are the kinematic
+parameters. For a planar mechanism the hinge axes are parallel, and the
+perpendicular distances between them are the link lengths.
+
+*Limits to plan around.*
+
+- *Arc length.* The centre and radius of a circle are poorly determined
+  from a short arc, and badly correlated with each other. The axis
+  direction needs the points to spread widely in the plane. Use as much
+  of the joint's range as possible and mount the prism far from the
+  axis. The observability report gives the resulting uncertainty before
+  the sweep is made.
+- *Parallel axes add no orientation.* On a planar mechanism every hinge
+  gives the same axis direction, so sweeping more hinges does not supply
+  the third mounting angle of a unit. That comes from a second,
+  non-parallel axis, which the slew provides, or from gravity in the
+  static poses. Slewing is therefore part of the inertial calibration
+  even though it ends the slew epoch.
+- *An axis parallel to gravity* leaves the accelerometers uninformative
+  about rotation around it, so for the slew axis the complementary
+  information has to come from a hinge sweep or the instrument.
+- *The single-axis assumption has to be checked, not trusted.* The usual
+  violations:
+  - another joint creeps while it is supposed to be held, which
+    hydraulic cylinders do under load;
+  - the base rocks as the centre of gravity moves with the link,
+    especially on soft ground or tyres;
+  - the joint has play, so the axis is not fixed.
+
+  The evidence is in the data: the scatter of the gyroscope's rate
+  direction, relative rotation between units on links that should be
+  rigidly related, the base unit's tilt during the sweep, and the
+  out-of-plane residual of the circle. Where the base does rock, its
+  measured tilt is used to correct the prism positions instead of
+  discarding the sweep.
+
+*One step, not two.* The classical method fits a circle per joint and
+then derives parameters from the fitted axes. Here the raw tracked
+positions and inertial samples go into the graph directly, with the
+single-axis assumption as the factor that makes all samples of a sweep
+share one axis. That uses the data once, with correct weights, and
+carries the uncertainty of each axis into everything derived from it.
+The separate circle fit is kept as the starting value for the solve and
+as an immediate check in the field that the sweep was good.
+
 **Choosing validation poses: where the predicted error is largest.** A
 calibration is validated by an independent measurement, typically the
 total station on the tool point, in poses that were not used for
@@ -2454,6 +2552,10 @@ properties already have (`compile-time.md`).
   tied to the GNSS frame by control points? Is the machine held static
   for each observation, and in how many poses? Is the repeated-touch
   observation (a tool point on a fixed mark) practical on this machine?
+- For single-joint sweeps: can each joint be moved alone over most of
+  its range while the others hold, and how much do held cylinders creep?
+  How firmly is the base supported during calibration? Is "singular
+  motion" meant as one joint at a time, as assumed here?
 - The total station can track, single and multiple prisms are
   possible, lock-on time is a problem, and calibration without the
   instrument is a goal (stated by the owner). Which quantity defines
