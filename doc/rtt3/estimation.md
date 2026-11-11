@@ -1266,6 +1266,113 @@ disturbance accumulated between it and the base, and a cascade that
 estimated the base from its own sensors alone would ignore all but one
 of them.
 
+### Deciding when accelerometer inclination can be trusted
+
+An accelerometer gives a link's inclination only to the extent that what
+it measures is gravity. A fixed threshold on how far the reading's
+magnitude is from one g, or on the gyroscope's rate, is the simplest
+test and has well-known weaknesses: it chatters near the threshold, it
+is expressed in raw units that depend on the sensor and on vibration, a
+gyroscope bias shifts it, and an acceleration perpendicular to gravity
+can leave the magnitude almost unchanged. The alternatives below are
+ordered from the most to the least preferable for this system; the
+detectors named are from the inertial-navigation literature and are
+described from general knowledge.
+
+**1. Ask the right question.** What matters is not whether the link is
+motionless but whether the accelerometer's reading is explained. Two
+consequences:
+
+- *Model the motion instead of detecting its absence.* The acceleration
+  at each unit caused by the motion of the joints upstream is predicted
+  from the state through the generated kinematics (the lever-arm terms
+  already described) and removed in the measurement model. Inclination
+  then remains usable during smooth motion, and only the unmodelled
+  remainder has to be dealt with.
+- *Let the residual decide.* How well an accelerometer sample agrees
+  with the model, given everything else in the window, is its whitened
+  residual. That is a properly scaled, dimensionless test statistic
+  which already accounts for gyroscope bias, for the predicted motion
+  and for the other sensors. A fixed threshold on it has a meaning (a
+  false-rejection probability), which a threshold on raw acceleration
+  does not.
+
+**2. Weight, do not gate.** Replace the yes-or-no decision by a
+covariance that grows smoothly with the evidence of disturbance. The
+accelerometer's measurement covariance is raised as a function of the
+deviation of the magnitude from one g, the angular rate and angular
+acceleration, and the commanded motion. Nothing switches, so nothing
+chatters, and a slightly disturbed sample still contributes a little.
+This is the varying per-sensor covariance once more. A robust loss on
+the gravity factors does the same thing from the residual side.
+
+**3. If a decision is needed, use a windowed likelihood-ratio test.**
+For the cases that do need a discrete answer (starting a static
+calibration pose, applying a zero-rate update), the standard improvement
+on a threshold is a test over a short window that combines both sensors:
+the mean squared deviation of the accelerometer samples from a gravity
+vector of magnitude one g in their own average direction, divided by the
+accelerometer noise variance, plus the mean squared angular rate divided
+by the gyroscope noise variance. The sum is compared with a threshold.
+
+- It is a likelihood-ratio test of "stationary" against "moving", so the
+  threshold is chosen from a false-alarm probability and is in noise
+  units, not raw units.
+- Averaging over the window makes it far less sensitive to single noisy
+  samples than a per-sample threshold.
+- Simpler members of the same family (accelerometer variance alone,
+  magnitude alone, rate energy alone) are special cases and are weaker.
+- The angular rate used is the bias-corrected one from the estimator.
+
+**4. Make the decision sticky.** Stationarity persists: a machine that
+was still a moment ago is probably still. A two-state model with small
+transition probabilities, updated by the test statistic, gives
+hysteresis and a minimum dwell time in a principled way, and outputs a
+probability instead of a flag. The commands are a strong prior for it:
+with no motion commanded, the prior for "stationary" is high.
+
+**5. Use the chain, not one sensor.** With a unit on every link, a link
+is stationary only if everything upstream of it is. A joint test over
+all units (all rates near their biases, and all gravity directions
+consistent with one static configuration of the mechanism) is more
+powerful than five separate tests, and it also localises motion: the
+first unit along the chain that fails the test marks the innermost joint
+that is moving.
+
+**6. In the factor graph, let the optimiser choose.** Instead of deciding
+before the solve, each interval can carry a factor that is a mixture of
+two hypotheses: a tight one (the link did not move: zero rate, constant
+gravity direction) and a broad one (it may have). The solve picks the
+component that fits, and because it is a window it can revise the choice
+for an earlier interval in the light of later data. When the static
+hypothesis holds, the zero-rate factor makes the gyroscope biases
+directly observable, which is the main benefit of detecting stillness at
+all. Mixture factors make the cost non-convex; with a good initial value
+from the previous solve and one of the detectors above as the starting
+guess this is manageable, and the iteration count stays fixed.
+
+**Vibration.** A machine with its engine running is never still in the
+accelerometer's sense, so tests based on variance fail exactly when they
+are needed. Two measures: the test is applied to the mean over a window
+long compared with the vibration period, so that zero-mean vibration
+cancels; and the noise variances in the test are the current ones,
+tracked from the high-frequency content of the signals, so that the
+threshold rises and falls with the vibration level instead of being
+tuned for one engine state.
+
+**Learned detectors.** Classifiers trained on labelled data exist for
+this task. They are not proposed here: the methods above are sufficient,
+their behaviour can be stated and tested, and a learned detector would
+need data and verification of its own.
+
+**Recommendation.** Model the lever-arm accelerations and weight the
+accelerometer factors by covariance and robust loss as the default; this
+removes the need for a hard decision in normal operation. Use the
+windowed test with the two-state model, across the whole chain, where a
+discrete answer is needed, in particular for static calibration poses
+and zero-rate updates. Add mixture factors if bias estimation during
+operation needs the benefit of stillness without a prior decision.
+
 ### A truncated factor graph in place of a pure EKF
 
 **Direction from the owner:** the estimator is to be a truncated factor
@@ -2337,6 +2444,9 @@ properties already have (`compile-time.md`).
   covariance factor) is the proposed way to use 32-bit lanes. What are
   the magnitudes and required resolutions of the states, and how long
   does the filter run without a reset? Those decide whether it is safe.
+- How is stillness detected today for accelerometer inclination, and
+  what goes wrong with it (chatter, engine vibration, slow motion
+  missed)? Are commands available to the estimator as a prior?
 - For external calibration observations: which reference points exist
   on each link and how well are their coordinates known? Does the total
   station give raw angles and distance or only coordinates, and is it
