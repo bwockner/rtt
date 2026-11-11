@@ -152,6 +152,19 @@ in pages from disk.
   executables with `-Wl,-z,now`. Start-up becomes slightly slower.
 - ABI: none.
 
+**D8. The real-time allocator is guarded by one mutex.** TLSF is built
+with locking on (`rtt/os/tlsf/tlsf.c:65`) and the lock is an ordinary RTT
+mutex (`rtt/os/tlsf/target.h:44-45`), so it has no priority inheritance
+until D1 is applied. Everything that uses the real-time allocator from
+several threads contends on it: `rt_string`, `OperationCaller::send` (D5),
+and OCL's real-time logging, which allocates a string per message.
+
+- Change: none beyond D1, which gives this lock priority inheritance.
+  Hold times are short and bounded, so with D1 the remaining cost is
+  contention, not inversion. Per-thread pools would remove the contention
+  but change how memory is sized and are not an easy win.
+- ABI: none.
+
 ### 3.2 Data-flow path (highest value for throughput)
 
 A write followed by a read passes through a chain of channel elements.
@@ -357,13 +370,28 @@ File I/O and priority inversion, in particular:
 - **Avoid a serial console** as the destination of standard output on the
   target; redirect it to a file or to memory.
 
+Logging from real-time components, in particular:
+
+- **Prefer OCL's real-time logging to `RTT::Logger` in real-time code.**
+  As far as I know from the OCL project (not verified against its source
+  here), `OCL::logging` formats into a real-time string in the caller and
+  passes it through a buffered port to appender components that write on
+  non-real-time threads. That removes the global logger lock and the I/O
+  from the real-time thread (D3, D6).
+- It is not lock-free or allocation-free: each message allocates from the
+  TLSF pool under the pool's mutex (D8), and formatting runs in the
+  real-time thread. So: apply D1, size the pool for the worst logging
+  burst with growth off (D5), look up categories once in `configureHook`,
+  check the level before building a message, and make sure the port to
+  the appenders uses a lock-free buffered connection of adequate size.
+
 ## 4. Order of work
 
 | Step | Items | ABI effect | Why this order |
 |---|---|---|---|
 | 0 | Benchmarks and baseline | none | Everything else is judged against it |
 | 1 | B1, B2, B3, B4 | none | No code change; immediately reversible |
-| 2 | D1, D2, D4, D5, D6, D7 | none | Largest determinism gain; library-only or configuration-only changes |
+| 2 | D1, D2, D4, D5, D6, D7 (D8 is covered by D1) | none | Largest determinism gain; library-only or configuration-only changes |
 | 3 | D3 | recompile | Removes a process-wide lock from real-time paths |
 | 4 | F3, F4, F1 step 1, F2 | recompile | Mechanical; together they remove most per-hop overhead |
 | 5 | F5, E2 (code part) | recompile | Depends on measurements from step 4, mainly on ARM |

@@ -1062,6 +1062,92 @@ console cannot keep up, since a serial console can stall a writer for
 milliseconds. Log files are best placed on a device that the control
 process does not otherwise depend on.
 
+#### Logging from real-time threads
+
+**What exists today.** `RTT::Logger` formats under a global mutex and
+writes while holding it (see `optimisation-plan.md`, D3 and D6). OCL adds a
+separate real-time logging facility (`OCL::logging`): a category formats
+the message in the calling thread into a real-time string, sends it as an
+event through a buffered port, and appender components on non-real-time
+threads write it out. That keeps I/O out of the real-time thread, but it
+is not lock-free and not allocation-free: the string is allocated from the
+TLSF pool on every message, and that pool is guarded by one mutex
+(`rtt/os/tlsf/tlsf.c:65`, `rtt/os/tlsf/target.h:44-45`), created without
+priority inheritance. Formatting cost is also paid in the real-time
+thread. The description of OCL here is from knowledge of that project, not
+from reading its source in this session, and should be checked against the
+version in use.
+
+**Design for `rtt3`: record now, format later.**
+
+```cpp
+rtt3::log::warn("axis {} over limit: {:.3f} rad", axis, position);
+```
+
+In the calling thread this does four things and nothing else:
+
+1. Loads the category's level (one relaxed atomic load) and returns if the
+   message is filtered.
+2. Reserves space in **this thread's own** ring.
+3. Writes a fixed header (pointer to the call site's static description,
+   timestamp) followed by the raw bytes of the arguments.
+4. Publishes the record with one atomic store.
+
+There is no formatting, no allocation, no lock and no system call. The
+text is produced later by a drain thread.
+
+- **One ring per thread.** Each real-time thread is the single producer of
+  its ring and the drain thread the single consumer, so the producer is
+  wait-free and never contends with another logging thread. Rings are
+  sized at configuration and laid out as in "Cache behaviour". The drain
+  thread merges records from all rings by timestamp.
+- **Call-site description.** The format string, level, source location and
+  the argument types are a constant in read-only storage, one per call
+  site; the record carries only its address. The format string is checked
+  against the argument types at compile time, as `std::format` does.
+- **Arguments** must satisfy a `loggable` concept: trivially copyable
+  values, string literals (stored as a pointer), and bounded strings
+  (copied up to a stated maximum). Port data types are loggable as values:
+  the sample is copied in binary and rendered on the drain thread by a
+  formatter generated through reflection, so logging a whole state struct
+  costs one small copy.
+- **Timestamps** come from the monotonic clock through the vDSO, or from
+  the cycle start time the node already has, when per-message resolution
+  is not needed.
+- **Overflow.** A full ring drops the new record and increments a counter;
+  the drain thread later emits a "n messages dropped" line in that
+  thread's sequence. The real-time thread never waits. A flight-recorder
+  mode, selectable per ring, overwrites the oldest records instead and is
+  only written out on request or on a fault.
+- **Repetition control** for messages inside control loops:
+  `log::every(1s, ...)` and `log::once(...)`, with per-site state owned by
+  the calling thread.
+- **Levels and categories.** Each node has a category named after it;
+  levels are atomics that the inspection service can change while running.
+- **Drain thread.** Non-real-time, on a non-isolated core, polling on its
+  own timer so that no real-time thread ever wakes it. It formats with
+  `std::format` and writes to the sinks: console (non-blocking), file, and
+  the inspection service. Because each record has typed fields, a
+  structured sink (one JSON object per line) costs nothing extra.
+- **Crashes.** Records still in the rings are lost if the process dies
+  before the drain thread runs. To limit that, the rings live in one
+  memory region that a fault handler flushes on a best-effort basis, and
+  that can optionally be a shared mapping so a separate process can
+  recover the last records after a crash.
+- **Non-real-time threads** use the same interface with their own rings,
+  so there is one logging path, not two.
+
+**The cost of having no macros.** A logging function's arguments are
+evaluated before the level check inside it, whereas a macro can skip them.
+For cheap values this does not matter. For an argument that is costly to
+compute, the call takes a callable that runs only if the level passes:
+`log::debug([&] { return rtt3::log::args("residual {}", expensive()); })`.
+
+**Checking it.** Logging at an enabled level from a real-time thread runs
+under the allocation guard and the system call filter in the test suite,
+and a benchmark records the cost per message in both the filtered and the
+recorded case.
+
 ## 5. Phasing
 
 Each phase ends with tests green on x86-64 and AArch64.
@@ -1069,7 +1155,7 @@ Each phase ends with tests green on x86-64 and AArch64.
 | Phase | Content | Exit criterion |
 |---|---|---|
 | 0. Baseline | Fork, GCC 16 toolchain image (native and AArch64 cross), reflection conformance tests and a spike of `rtt3/meta/` on the real compiler, new CMake and CI beside the old tree, benchmark harness, RTT 2.x numbers recorded on desktop and ARM board | Reproducible baseline; every reflection feature in 4.7 confirmed working or the plan revised; empty `rtt3` libraries build and install next to RTT 2.x |
-| 1. OS layer | `rtt3::os`, memory locking, graceful downgrade, logger front end, simulated clock | Thread, timing and lock tests pass; wake-up latency measured on the ARM board |
+| 1. OS layer | `rtt3::os`, memory locking, graceful downgrade, per-thread log rings and drain thread, simulated clock | Thread, timing and lock tests pass; wake-up latency measured on the ARM board |
 | 2. Lock-free primitives | Data object, buffers, queues, pool | Stress and model-checking tests pass on both architectures |
 | 3. Components and ports | `rtt3/meta/` component tables, `component` concept, ports, channels, policies, `connect`, activities, lifecycle, error type | Hand-wired example runs; port latency no worse than baseline |
 | 4. Static deployment | Deployment struct, slots, substitutable links and machine-file selection (minimal reader), graph model specification and `--graph` export, validation, scheduling fold, channel selection, `run` | Example system with a simulated and a real hardware alternative runs from one binary, with zero allocations after start-up and no string handling after configuration |
