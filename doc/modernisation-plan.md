@@ -812,6 +812,81 @@ time, the benchmark suite records cache-miss counts alongside latency, and
 equivalent needs the statistical profiling extension, so that analysis is
 done on the desktop and confirmed by timing on the target).
 
+#### Context switches
+
+In a typical RTT 2.x system every component has its own thread, so one
+control cycle through sensor, controller and driver costs three wake-ups.
+Each sample written to an event port wakes the receiving thread, and an
+own-thread operation call blocks the caller, wakes the callee and wakes
+the caller again. The strategies below remove switches in that order of
+importance.
+
+**1. Fewer threads.** Nodes are folded into one thread when they share a
+period and priority (4.5). Folding is extended to harmonic rates: a node
+with a 10 ms period can run every tenth cycle of a 1 ms thread at the
+same priority. A whole processing chain then costs one wake-up per period.
+The fold is reported at build time and at start-up (which nodes share
+which thread), and a node can opt out with an annotation when it must be
+preemptible separately.
+
+**2. Triggered nodes run inline.** A node triggered by a port whose writer
+is in the same thread runs directly after the writer in the same cycle;
+there is no wake-up and no queueing through the scheduler.
+
+**3. Cross-thread triggers are coalesced and deferred.**
+- A trigger is one wake-up per writer cycle, however many samples were
+  written.
+- The writer checks an atomic "already pending" flag first, so a target
+  that is running or already signalled costs no system call.
+- Wake-ups are issued at the end of the writer's cycle, not in the middle
+  of `update()`. Waking a higher-priority thread mid-cycle would preempt
+  the writer immediately and cost two extra switches for the same work.
+
+**4. Operation calls that do not switch.**
+- A call between nodes in the same thread is a direct function call.
+- Client-thread operations are direct calls from any thread; the
+  annotation states that the operation is safe for that.
+- An own-thread operation called from another thread is asynchronous by
+  default: `send` enqueues the request and returns a handle, and the
+  result is collected on a later cycle. A blocking cross-thread call from
+  a real-time node is a compile-time error unless the call site marks it
+  as intended, because it costs two switches and ties the caller's timing
+  to the callee's.
+
+**5. Nothing on the update path can block.** Channels are lock-free, so
+there are no switches caused by lock contention. Mutexes exist only on
+configuration and inspection paths and use priority inheritance. Memory is
+locked and prefaulted, so there are no page faults, each of which is a
+kernel entry and a possible reschedule.
+
+**6. Real-time threads never wake helper threads.** The log drain, the
+port observers and the UDP bridge poll their rings on their own timers at
+a modest rate. A real-time thread therefore never makes a wake-up system
+call on behalf of logging, inspection or simulation. Where lower latency
+is wanted for a helper, it uses the same pending-flag scheme as point 3.
+
+**7. One sleep per thread per period.** Each periodic thread makes a
+single absolute-time sleep call per cycle. Clock reads go through the
+vDSO and do not enter the kernel. I/O-driven chains (a fieldbus cycle, a
+file descriptor) run in the thread that waits for the I/O, so the chain
+is not handed to a second thread when data arrives.
+
+**8. System configuration that removes involuntary switches.** These are
+outside the library but checked by the start-up report (4.3):
+- real-time threads pinned to isolated cores (`isolcpus`, `nohz_full`,
+  `rcu_nocbs`), with device interrupts steered elsewhere;
+- distinct priorities for real-time threads sharing a core, so they do
+  not time-slice against each other;
+- interrupt threads for the fieldbus or network device at a priority
+  consistent with the control thread that depends on them.
+
+**Checking it.** Each thread's voluntary and involuntary switch counts are
+read from the kernel and exposed through the inspection service, with the
+expected value (one voluntary switch per period) alongside. A benchmark in
+CI runs the example deployment and fails if the number of wake-ups per
+cycle rises. `perf sched` and the `sched_switch` tracepoint are the tools
+for finding the cause when it does.
+
 ## 5. Phasing
 
 Each phase ends with tests green on x86-64 and AArch64.

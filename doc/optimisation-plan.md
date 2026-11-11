@@ -247,6 +247,25 @@ These need no change to RTT at all, only a review of the components:
 - **Review connection policies**: a lock-free data connection suits a
   single latest value; unbuffered where possible avoids pool traffic.
 
+Context switches, in particular:
+
+- **One thread per component is the default cost.** Tightly coupled
+  components can share a thread today by giving the followers a
+  `SlaveActivity` and executing them from the leader's `updateHook`, in
+  data-flow order. A chain of three components then costs one wake-up per
+  cycle instead of three.
+- **Event ports wake the receiver for every sample.** Where the receiving
+  component is periodic anyway, a plain port read in `updateHook` avoids
+  the extra wake-ups.
+- **Own-thread operations cost two switches per call** (caller blocks,
+  callee runs, caller resumes). Operations that are safe to run in the
+  caller's thread can be declared `ClientThread`; otherwise prefer `send`
+  and collect the result on a later cycle to a blocking `call` from a
+  real-time thread.
+- **Thread placement**: pin real-time activities to isolated cores using
+  the existing CPU affinity argument of `Activity`, and avoid equal
+  priorities on one core.
+
 ## 4. Order of work
 
 | Step | Items | ABI effect | Why this order |
