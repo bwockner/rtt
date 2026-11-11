@@ -1,18 +1,20 @@
-# RTT modernisation plan (C++17 core, C++23 and C++26 opt-in)
+# rtt3: plan for a C++23 successor to Orocos RTT
 
-Status: proposal for a new fork. Scope is the C++ API only; the CORBA transport
-and the Python and Lua bindings are out of scope and are not carried forward.
+Status: proposal for a new fork. Scope is the C++ API only. The CORBA
+transport and the Python and Lua bindings are not carried forward.
 
 ## 1. Decisions taken
 
 | Topic | Decision |
 |---|---|
-| Language baseline | The library builds as C++17. C++20/23 features live in an additive header layer that switches on when the consumer compiles with a newer standard. C++26 reflection is a further header-only tier, GCC 16 only for now. |
-| Introspection | The typed core carries no names and no `TypeInfo`. Names, by-name lookup, properties, marshalling and scripting become an opt-in library layered on the core. |
-| Deployment | Static first: a deployment is described in C++ and checked and wired by the compiler. Runtime loading (`ComponentLoader`, `PluginLoader`) stays as an optional module. |
-| Namespace and install | All new code lives in namespace `rtt3`, with its own header directory, library names and CMake package, so the fork installs next to RTT 2.x. |
-| Macros | Replaced by templates wherever the language allows; the few that remain are listed in 4.9. |
-| OS targets | Linux only, standard and PREEMPT_RT kernels, on x86-64 (desktop testing) and ARM (deployment). No other OS, RTOS or bare-metal backend is planned; the OS code is kept behind a small internal interface but is not a customisation point. |
+| Language | C++23 is required. There is no C++17 or C++20 mode. C++26 reflection is an optional header-only tier, GCC 16 only for now. |
+| API | A new, clean API. The classic RTT API (`TaskContext`, `InputPort<T>`, `OperationCaller`, ...) is not provided, not even as a wrapper. Existing components are ported by hand with a migration guide. |
+| Namespace and install | Everything lives in namespace `rtt3` with its own header directory, library names and CMake package, so it installs next to RTT 2.x and can be loaded into the same process. |
+| Introspection | The typed core carries no names and no runtime type registry. Names, by-name lookup, property files and runtime loading are an opt-in library on top. |
+| Deployment | Static first: a deployment is described in C++ and checked and wired by the compiler. Runtime loading is optional. |
+| Macros | Replaced by templates wherever the language allows. The few that remain are listed in 4.8. |
+| OS targets | Linux only, standard and PREEMPT_RT kernels, on x86-64 (desktop testing) and ARM (deployment). |
+| Errors | The API reports failure through `std::expected` and never throws. Exceptions are tolerated only at the boundary to user code (4.2). |
 
 ## 2. Where the code is today
 
@@ -20,270 +22,279 @@ Measured on this tree, excluding `rtt/transports/corba`:
 
 - About 105k lines under `rtt/`. `scripting` (111 files), `internal` (100),
   `os` (117), `types` (59) and `marsh` (33) are the bulk.
-- No C++ standard is set in CMake; the code is C++98 with Boost standing in
-  for later standard features.
-- Boost usage: `boost::function` 495 uses, `boost::bind` 205,
-  `boost::shared_ptr` 140, `boost::intrusive_ptr` 55, `boost::serialization` 56,
-  `boost::mpl` 44, `boost::fusion` 23, plus `function_types`, `type_traits`,
-  `lambda`, `call_traits`, `lexical_cast`, Spirit Classic (scripting parsers)
-  and Graph (scripting).
-- Operation signatures are taken apart with `function_types` + `fusion`
-  (`OperationInterfacePartFused.hpp`, `FusedFunctorDataSource.hpp`,
-  `CreateSequence.hpp`, `UnMember.hpp`, `BindStorage.hpp`).
+- C++98 with Boost standing in for later standard features:
+  `boost::function` 495 uses, `boost::bind` 205, `boost::shared_ptr` 140,
+  `boost::intrusive_ptr` 55, `boost::serialization` 56, `boost::mpl` 44,
+  `boost::fusion` 23, plus `function_types`, `lambda`, Spirit Classic and
+  Graph (both in scripting).
 - 742 `const std::string&` parameters. Ports, operations, properties,
-  services and peers are all found by name in `std::map`/`std::vector`
-  containers and then recovered with `dynamic_cast` (81 uses), for example
+  services and peers are found by name in `std::map`/`std::vector`
+  containers and recovered with `dynamic_cast` (81 uses), for example
   `DataFlowInterface::getPortType<T>(name)` and `ConnFactory::createConnection`.
-- Every `PortInterface` stores three `std::string`s (name, full name,
-  description) and is polymorphic over 20 or so virtuals.
+- Every `PortInterface` stores three `std::string`s and is polymorphic over
+  about 20 virtuals.
 - `rtt/os` carries gnulinux, Xenomai 2, RTAI/LXRT, eCos, macOS and Win32
-  targets, hand-written atomics per architecture (`oro_i386`, `oro_x86_64`,
-  `oro_powerpc`, `oro_gcc`, `oro_msvc`, `oro_noasm`) and a vendored TLSF.
+  targets, hand-written atomics per architecture and a vendored TLSF.
 - Components register through `ORO_CREATE_COMPONENT` macros into a global
-  `std::map<std::string, factory>`; there is a static-link variant, but it
-  still resolves by string at start-up.
-- Build: vendored `FindBoost.cmake`, catkin and rosbuild (`manifest.xml`)
-  support, a `configure` wrapper, `.travis.yml`, optional Xerces with a
-  vendored TinyXML fallback, tests on Boost.Test.
+  `std::map<std::string, factory>` behind unversioned `extern "C"` symbols.
+- Roughly 375 `#define`s besides include guards.
+- Build: vendored `FindBoost.cmake`, catkin and rosbuild support, a
+  `configure` wrapper, `.travis.yml`, optional Xerces with a vendored
+  TinyXML fallback, 96 test files on Boost.Test.
 
-## 3. Target architecture
+## 3. Approach and target architecture
 
-Four libraries, each depending only on the ones above it:
+### Build new, do not convert
+
+With the classic API gone and C++23 as the floor, very little of the
+existing code survives in recognisable form: the DataSource and typekit
+machinery, the `fusion`-based operation plumbing, the string-keyed
+interfaces and the `fosi` layer are all replaced, not modernised. A
+mechanical pass that swaps Boost for `std` in code that is about to be
+deleted would be wasted work.
+
+The plan is therefore to write `rtt3` as a new source tree in this
+repository, port the parts that hold real value, and delete the old `rtt/`
+tree at the end. The parts worth porting, as algorithms and behaviour
+rather than as code:
+
+- the lock-free data object, buffers, queues and memory pool;
+- activity semantics (periodic, triggered, slave, file-descriptor, simulation);
+- the component lifecycle state machine and its error states;
+- connection policies (data, buffer, circular; pull and push; shared);
+- operation call semantics (own thread and client thread, send and collect);
+- the behavioural expectations encoded in the existing tests.
+
+The old tree stays buildable until removal, as the benchmark baseline and
+as a reference for behaviour.
+
+### Libraries
 
 ```
-rtt3-os          Linux threads, clocks, mutexes, memory (x86-64 and ARM)
-rtt3-core        typed ports, channels, buffers, activities, execution engine,
-                TaskContext lifecycle. No names, no TypeInfo, no Boost.
-rtt3-reflect     names, TypeInfo/typekits, properties, operations by name,
-                marshalling, runtime component and plugin loading
-rtt3-scripting   program and state machine scripts (depends on rtt3-reflect)
+rtt3-os        Linux threads, clocks, mutexes, memory (x86-64 and ARM)
+rtt3-core      typed ports, channels, lock-free primitives, activities,
+               execution engine, lifecycle, static deployment.
+               No names, no runtime type registry.
+rtt3-reflect   names, by-name lookup, type descriptions, property files,
+               runtime component loading, introspection for tooling
 ```
 
-`rtt3-core` is the part a statically deployed real-time system links.
-`rtt3-reflect` gives back the classic API: `TaskContext::getPort("name")`,
-`addOperation("name", ...)`, `.cpf` files, and so on.
+A statically deployed real-time system links `rtt3-os` and `rtt3-core`
+only. No library depends on Boost.
 
 ### Naming and concurrent installation
 
-Nothing the fork installs shares a name with RTT 2.x:
-
-| Item | RTT 2.x | Fork |
+| Item | RTT 2.x | rtt3 |
 |---|---|---|
 | Namespace | `RTT` | `rtt3`, with an inline ABI namespace (`rtt3::v0`) |
 | Headers | `<rtt/...>` | `<rtt3/...>` |
-| Libraries | `liborocos-rtt-<target>` | `librtt3-os`, `librtt3-core`, `librtt3-reflect`, `librtt3-scripting` |
+| Libraries | `liborocos-rtt-<target>` | `librtt3-os`, `librtt3-core`, `librtt3-reflect` |
 | CMake package and targets | `orocos-rtt` | `rtt3`, targets `rtt3::core` and so on |
 | pkg-config | `orocos-rtt-<target>.pc` | `rtt3-*.pc` |
-| Component and plugin search path | `RTT_COMPONENT_PATH` | `RTT3_COMPONENT_PATH` |
-| Plugin entry points | unversioned `extern "C"` symbols (`createComponent`, `getComponentType`, ...) | none; see 4.9 |
+| Component search path | `RTT_COMPONENT_PATH` | `RTT3_COMPONENT_PATH` |
+| Plugin entry points | unversioned `extern "C"` symbols | none (4.8) |
 
-Because every symbol is mangled under `rtt3`, both versions can also be
-loaded into one process, which allows a system to be migrated one component
-library at a time.
+Because every symbol is mangled under `rtt3`, both versions can be loaded
+into one process, so a system can be migrated one component at a time, with
+a small hand-written bridge component where data has to cross.
 
-### Compatibility model
+### What is not carried forward
 
-- **Typed API** (`rtt3::`) is C++17. It uses `template<auto>`
-  member-pointer handles, `std::string_view`, `std::optional`,
-  `std::variant` and `if constexpr`.
-- **Classic API** (`TaskContext`, `InputPort<T>`, `OutputPort<T>`,
-  `Property<T>`, `OperationCaller<Sig>`) lives in `rtt3::classic`, in
-  `rtt3-reflect`, as thin wrappers over the typed core. Existing component
-  source is ported by changing the include to `<rtt3/classic/RTT.hpp>`,
-  which declares `namespace RTT = rtt3::classic;`. Code written against
-  `RTT::` then compiles unchanged apart from the two breaks below, while
-  its symbols stay under `rtt3`. One translation unit cannot include both
-  this header and the RTT 2.x headers; separate translation units and
-  libraries can.
-- Source breaks for classic code: `boost::` types in public signatures
-  (see 4.2) and the registration macros (see 4.9).
-- **C++23 layer** is guarded by feature-test macros (`__cpp_concepts`,
-  `__cpp_lib_expected`, `__cpp_explicit_this_parameter`, ...) inside library
-  headers and only adds overloads and diagnostics. No ABI-affecting type
-  changes shape depending on the consumer's standard, so C++17 and C++23
-  translation units can link against the same library binary.
+- CORBA transport, Python and Lua bindings (out of scope by request).
+- The classic API and with it the `DataSource`, `TypeInfo`/typekit and
+  `OperationInterfacePart` machinery.
+- All non-Linux OS targets and assembler atomics.
+- catkin, rosbuild, the `configure` script, Xerces.
+- **Proposed, to be confirmed (open question 1):** the scripting engine
+  (program scripts and state machines). It is 111 files written entirely
+  against the DataSource machinery and Spirit Classic, so keeping it means
+  writing a new interpreter, not porting one.
 
 ## 4. Workstreams
 
-### 4.1 Build and repository
+### 4.1 Build and toolchain
 
-- Minimum CMake 3.22; target-based, exported targets
-  (`rtt3::os`, `rtt3::core`, `rtt3::reflect`, `rtt3::scripting`), `CMakePresets.json`.
-- `CMAKE_CXX_STANDARD 17` for the library; CI also builds and tests as C++20
-  and C++23.
-- Delete: vendored `FindBoost.cmake` and the other `config/Find*.cmake`
-  modules no longer needed, `configure`, `manifest.xml`, catkin and
-  `env-hooks`, `.travis.yml`, `UseOROCOS-RTT*.cmake` (replace with a small
-  config package and an `rtt3_add_component()` helper).
-- CI on GitHub Actions, Linux only: GCC 9 (C++17 floor), GCC 13+/Clang 17+
-  (C++23) and GCC 16 with `-std=c++26 -freflection` (4.8), on x86-64 and
-  AArch64 (4.3), with ASan, UBSan and TSan jobs. GCC 16 defaults to `-std=gnu++20`, so the standard is always set
-  explicitly. TSan matters because the lock-free code is
-  being rewritten.
-- Tests: move off Boost.Test to Catch2 or GoogleTest (see open questions).
-  Port the tests before touching the code they cover; the 96-file suite is
-  the regression net for the whole effort.
+- CMake 3.28 or later, target-based, exported targets, `CMakePresets.json`
+  including an `aarch64-linux-gnu` cross preset.
+- `CMAKE_CXX_STANDARD 23`, extensions off.
+- Proposed compiler floor: GCC 14 and Clang 18 with libstdc++ 14. This is
+  what deducing `this`, `std::expected` with monadic operations,
+  `std::move_only_function`, `std::print` and `std::generator` need
+  together. Features that arrive later (`std::flat_map` in GCC 15,
+  `std::inplace_vector` in C++26) are not used in installed headers until
+  the floor moves. See open question 6 on the ARM toolchain.
+- CI on GitHub Actions, Linux only: GCC 14 and Clang 18 as the floor, a
+  current GCC and Clang, and GCC 16 with `-std=c++26 -freflection` (4.7);
+  x86-64 and AArch64; ASan, UBSan and TSan jobs.
+- New test suite in a current framework (open question 9). The existing
+  Boost.Test files are not ported, since they exercise an API that no
+  longer exists; they are read as a specification when writing new tests.
+- A benchmark harness from the start: wake-up latency, port write and read
+  latency, operation call cost, start-up time, binary size, compile time.
+  RTT 2.x numbers are recorded first for comparison.
 
-### 4.2 Removing deprecated dependencies
+### 4.2 Error handling
 
-Out of the fork entirely: `rtt/transports/corba`, omniORB/TAO detection,
-`ORO_REMOTING`, RTAI/LXRT, Xenomai 2, eCos, `oro_arch` assembler, Xerces,
-`std::auto_ptr`, dynamic exception specifications (34 `throw(...)`).
+Rules:
 
-Boost replacements in `rtt3-os` and `rtt3-core` (goal: zero Boost):
+- Every fallible `rtt3` function returns `std::expected<T, rtt3::error>`
+  and is `noexcept` and `[[nodiscard]]`. `rtt3::error` is a small trivially
+  copyable value (an error code plus a pointer to static context), so
+  returning it never allocates.
+- Outcomes that are part of normal operation are not errors. Reading a port
+  returns a flow status (`no_data`, `old_data`, `new_data`); a full buffer
+  on write returns a status according to the connection policy.
+- Constructors do not fail. Components and library objects are cheap to
+  construct; anything that can fail happens in `configure()` or in factory
+  functions that return `expected`.
+- No `rtt3` function throws, at configuration time or on the update path.
 
-| Today | Replacement |
+**Why not allow exceptions at configuration time as well?** With
+`std::expected` available there is little left in their favour:
+
+| Argument for exceptions | Assessment |
 |---|---|
-| `boost::shared_ptr`, `weak_ptr`, `make_shared`, `scoped_ptr`, `enable_shared_from_this` | `std::` equivalents |
-| `boost::function`, `bind`, `mem_fn`, `lambda`, `ref` | `std::function` and lambdas; a fixed-capacity, non-allocating callable for real-time paths |
-| `boost::type_traits`, `mpl`, `static_assert`, `call_traits`, `utility` | `<type_traits>`, variadic templates, `static_assert`, `if constexpr` |
-| `boost::function_types` + `fusion` | variadic signature traits, `std::tuple`, `std::apply`, `std::invoke` |
-| `boost::intrusive_ptr` | a small in-tree intrusive pointer on `std::atomic` (kept because channel elements must not allocate a control block) |
-| `boost::array`, `tuple`, `cstdint` | `std::array`, `std::tuple`, `<cstdint>` |
-| `boost::thread`, `date_time` | `rtt3::os` threads, `<chrono>` |
-| `boost::filesystem` | `std::filesystem` (only in `rtt3-reflect` loaders) |
-| `boost::lexical_cast` | `std::from_chars`/`to_chars` |
-| `oro_atomic_*`, `CAS`, `AtomicInt`, `volatile` flags | `std::atomic` with explicit memory orders |
+| Constructors cannot return a value | Solved by the configure step RTT already has, and by factory functions. |
+| Less boilerplate when propagating errors through several layers | True, C++ has no propagation operator. The monadic operations (`and_then`, `transform`, `or_else`) cover most cases, and configuration call chains here are shallow. |
+| Errors cannot be silently ignored | `[[nodiscard]]` with `-Werror=unused-result` gives the same guarantee at compile time. |
+| The standard library throws anyway | True, and unavoidable; see below. It is a reason to tolerate exceptions, not to add more. |
+| Familiar to users | Weak; a mixed model (throwing at configuration, status on the update path) is harder to teach than one rule. |
 
-The `fusion` rewrite is the largest single item: it replaces the five
-headers listed in section 2 with one variadic implementation and removes a
-large amount of template instantiation cost.
+Against them: a throw has unbounded and allocation-dependent cost, so it
+must never happen on a real-time path anyway; a second error channel makes
+every function's contract two-part; and `expected` puts the failure modes
+in the signature where both the reader and the compiler can see them.
 
-Boost that survives, only in the optional layers, until separately replaced:
-Serialization (type decomposition in `rtt/types` and the mqueue transport),
-Spirit Classic and Graph (scripting). See open questions.
+**Where exceptions are still tolerated.** The libraries are compiled with
+exceptions enabled, because two sources remain that `rtt3` does not control:
 
-Source-compatibility consequence: any classic-API signature that names a
-`boost::` type changes, notably `boost::shared_ptr` handles and
-`boost::function` callbacks such as `DataFlowInterface::SlotFunction`.
-Lambdas and function pointers keep working; code passing `boost::bind`
-results into `std::function` also keeps working. Code that stores the
-`boost::` types by name needs editing.
+- The standard library (`std::bad_alloc`, `std::format` errors, container
+  operations) during configuration. `rtt3` code is written so that these
+  cannot occur for reasons other than memory exhaustion, which is treated
+  as fatal.
+- User code inside component hooks. By default the `rtt3::component`
+  concept requires hooks to be `noexcept`, which makes the contract
+  checkable at compile time; a throw then terminates the process
+  deterministically. A deployment can instead opt a node into
+  `rtt3::catch_exceptions`, which wraps its hooks in one `try`/`catch` and
+  moves the component to its fault state, as RTT 2.x does today. This is
+  for components that wrap third-party code that throws.
+
+Reflection queries in the C++26 tier may signal errors with exceptions
+during constant evaluation; that happens in the compiler and has no
+run-time effect.
 
 ### 4.3 OS layer: Linux on x86-64 and ARM
 
 The use case is one OS on two architectures: desktop x86-64 for testing,
 usually on a standard kernel without real-time privileges, and ARM running
-PREEMPT_RT for deployment. The plan follows that instead of a general
-porting layer.
+PREEMPT_RT for deployment.
 
-- Delete `fosi.h`, every non-Linux target (Xenomai, RTAI/LXRT, eCos, macOS,
-  Win32) and all `oro_arch` assembler. `rtt3-os` becomes a small set of
-  classes in `rtt3::os` written directly against POSIX and Linux calls. It
-  is an ordinary internal interface, not a template parameter or trait, so
-  the rest of the library is not templated on a backend. Keeping the OS
-  calls in this one library is the only provision for other systems.
+- `rtt3::os` is a small set of classes written directly against POSIX and
+  Linux calls. It is an ordinary internal interface, not a trait or
+  template parameter. Keeping OS calls in this one library is the only
+  provision for other systems.
 - Threads: `pthread` with `SCHED_FIFO`/`SCHED_RR`/`SCHED_OTHER`, optional
-  `SCHED_DEADLINE`, CPU affinity, thread names, and explicit stack size
-  with prefaulting.
+  `SCHED_DEADLINE`, CPU affinity, thread names, explicit stack size with
+  prefaulting.
 - Timing: `clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME)` for periodic
   activities; `<chrono>` types in the API.
 - Locks: mutexes created with `PTHREAD_PRIO_INHERIT`; condition variables
   on `CLOCK_MONOTONIC`. `std::mutex` is not used on real-time paths, as it
   gives no priority inheritance guarantee.
-- Memory: `mlockall(MCL_CURRENT | MCL_FUTURE)`, heap prefault and
-  `mallopt` trimming control in a `rtt3::os::lock_memory()` start-up call.
-  TLSF becomes one optional `std::pmr::memory_resource`; `rt_string` and
-  `oro_allocator` become pmr aliases.
+- Memory: `mlockall`, heap prefault and trim control in one start-up call.
+  A TLSF-backed `std::pmr::memory_resource` is available for bounded-time
+  allocation; `std::pmr` containers replace `rt_string` and `oro_allocator`.
 - **Same binary on both kinds of machine.** When real-time scheduling or
-  memory locking is refused (no `CAP_SYS_NICE`, no rtprio limit, as on a
-  typical desktop or CI container), the request is downgraded and reported
-  once instead of failing, with a strict mode for deployment that turns the
-  downgrade into an error. `SimulationActivity` and the simulated clock are
-  kept for deterministic tests.
-- Start-up report: kernel preemption model (`/sys/kernel/realtime`),
-  effective scheduling policy and priority per thread, locked memory, CPU
-  isolation. This catches the common case of deploying to a kernel or
-  container that is not configured as expected.
-- `Logger` splits into a lock-free, non-formatting real-time front end in
-  `rtt3-core` and sinks in `rtt3-reflect`. No static-init order
-  dependencies (`StartStopManager` goes).
-- Since bare-metal is no longer a goal, `rtt3-core` may use exceptions at
-  configuration time and RTTI is not banned. The rules that stay are the
-  real-time ones: no allocation, no blocking without priority inheritance
-  and no exceptions thrown on the update path.
+  memory locking is refused (no `CAP_SYS_NICE`, as on a typical desktop or
+  CI container), the request is downgraded and reported once. A strict mode
+  for deployment turns the downgrade into an error.
+- Start-up report: kernel preemption model, effective policy and priority
+  per thread, locked memory, CPU isolation.
+- A simulated clock and simulation activity for deterministic tests.
+- Logging: a lock-free, non-formatting front end usable from real-time
+  threads, with `std::format`-based sinks on a non-real-time thread.
 
 **ARM specifics.**
 
-- Supported architectures: x86-64 and AArch64. 32-bit ARMv7 is an open
-  question, because it changes the atomics design (see below).
+- Supported architectures: x86-64 and AArch64. 32-bit ARMv7 is open
+  question 5, because it changes the atomics design.
 - x86 has a strong memory model that hides most memory-ordering mistakes;
-  ARM does not. Lock-free code that passes every test on the desktop can
-  still be wrong on the target. The lock-free tests therefore have to run
-  on ARM hardware or at least under emulation, on every change (4.7).
-- Every atomic used on a real-time path is checked with
-  `static_assert(std::atomic<T>::is_always_lock_free)`. No algorithm may
-  depend on a double-width compare-and-swap; ABA protection uses index plus
-  generation counter packed in one 64-bit word, which is lock-free on
-  x86-64 and AArch64 but not guaranteed on ARMv7.
-- Cache-line padding uses a fixed project constant per architecture
-  instead of `std::hardware_destructive_interference_size`, whose value can
-  differ between compiler flags and so must not appear in installed headers.
-- Build: CMake toolchain files and presets for `aarch64-linux-gnu`, a
-  sysroot-based cross build, and static linking plus LTO as the default for
-  static deployments so that the deployed artefact is one executable.
-- CI: native x86-64 jobs; AArch64 jobs on ARM runners where available and
-  under `qemu-user` otherwise (functional tests only, since emulation says
-  nothing about timing or ordering).
-- Benchmarks from phase 0 (wake-up latency in the style of `cyclictest`,
-  port write/read latency, operation call cost) are run on both the desktop
-  and a reference ARM board with PREEMPT_RT, and tracked separately.
+  ARM does not. Lock-free tests therefore run on ARM on every change.
+- Every atomic on a real-time path is checked with
+  `static_assert(std::atomic<T>::is_always_lock_free)`. No algorithm
+  depends on double-width compare-and-swap; ABA protection packs an index
+  and a generation counter in one 64-bit word.
+- Cache-line padding uses a fixed project constant per architecture, not
+  `std::hardware_destructive_interference_size`, whose value can vary with
+  compiler flags and so must not appear in installed headers.
+- Static linking plus LTO is the default for static deployments, so the
+  deployed artefact is one executable.
+- CI: AArch64 on ARM runners where available, `qemu-user` otherwise
+  (functional tests only; emulation says nothing about timing or ordering).
+- Latency benchmarks run on the desktop and on a reference PREEMPT_RT ARM
+  board and are tracked separately.
 
-### 4.4 Typed core: ports and connections without strings
+### 4.4 Components and typed ports
 
-Core port types carry only what the data path needs:
+A component is a plain struct. There is no base class and no registration
+call; the `rtt3::component` concept recognises it by its members, and the
+lifecycle state, activity and engine live in the `rtt3::node<T>` that the
+deployment wraps around it.
 
 ```cpp
-namespace rtt3 {
-template <class T> class output_port;   // no name, no virtuals on the write path
-template <class T> class input_port;
-template <class T, class Policy> class channel;  // data / buffer / circular
-}
-```
-
-A component declares ports as plain members. A port is identified by a
-member pointer, so discovery is a compile-time expression instead of a map
-lookup followed by `dynamic_cast`:
-
-```cpp
-struct Controller : rtt3::component<Controller> {
+struct Controller {
     rtt3::input_port<JointState>    state;
     rtt3::output_port<JointCommand> command;
-    void update();
-};
+    double gain = 1.0;
 
-rtt3::connect(ctrl.command, driver.command_in, rtt3::policy::data{});   // T mismatch is a compile error
+    std::expected<void, rtt3::error> configure() noexcept;   // optional
+    void update() noexcept;                                    // required
+    void stop() noexcept;                                      // optional
+};
 ```
 
-- Type agreement is checked by overload resolution. The
-  `getTypeInfo()` pointer comparison in `ConnFactory.cpp` and the
-  `dynamic_cast<InputPort<T>*>` calls disappear from the core.
-- The connection policy becomes a type where it is known statically, so the
-  buffer implementation is chosen at compile time and the write path can be
-  inlined. `ConnPolicy` as a runtime struct remains in `rtt3-reflect`.
-- Port enumeration without macros: C++17 uses an explicit
-  `static constexpr auto ports = rtt3::ports(&Controller::state, &Controller::command);`
-  list. This is the one piece of boilerplate; the C++26 reflection tier
-  (4.8) removes it without an API change.
-- Names are attached outside the object, in `rtt3-reflect`, as a constexpr
-  table of `{string_view, member pointer}` per component type. The classic
-  `getPort("state")` is a lookup in that table, and a statically deployed
-  system that never asks for a name links none of it.
-- Where identifiers must exist at run time (remote transports, logging),
-  use compile-time FNV-1a hashes of the name with the string kept in a
-  separate section, not `std::string` members.
-- Classic `RTT::InputPort<T>`/`OutputPort<T>` become wrappers that own a
-  core port plus a name and implement `PortInterface`.
+- Hooks are found with `requires` expressions; absent hooks cost nothing.
+  All calls are direct and inlinable. Inside the library, deducing `this`
+  replaces CRTP where mixins are needed.
+- Ports carry only what the data path needs: no name, no description, no
+  virtual functions on the read and write paths.
+- A port is identified by a member pointer, so discovery is a compile-time
+  expression instead of a map lookup followed by `dynamic_cast`:
 
-The same treatment applies, in this order, to operations
-(`rtt3::operation<Sig>` as a member, called through a typed handle, with
-`OperationCaller<Sig>` by name layered on top), then properties and
-attributes, then services and peers.
+  ```cpp
+  rtt3::connect(ctrl.command, driver.command_in, rtt3::policy::data{});
+  ```
 
-String overhead reductions that apply even to the classic API:
-`std::string_view` parameters for lookups, heterogeneous lookup in sorted
-flat containers instead of `std::map<std::string, ...>`, no `std::string`
-construction on any path reachable from `updateHook`.
+  A mismatch of value type is a failed `rtt3::connectable<Out, In>`
+  constraint, reported at the call site.
+- The connection policy is a type wherever it is known statically, so the
+  buffer implementation is selected at compile time.
+- Metadata (port list, names, documentation, properties, operations) is
+  one constant, found through a single customisation point:
+
+  ```cpp
+  template <> inline constexpr auto rtt3::describe<Controller> = rtt3::component_info{
+      rtt3::name{"Controller"},
+      rtt3::port{&Controller::state,   "state",   rtt3::doc{"Measured joint state"}},
+      rtt3::port{&Controller::command, "command"},
+      rtt3::property{&Controller::gain, "gain"},
+      rtt3::operation{&Controller::reset, "reset", rtt3::own_thread},
+  };
+  ```
+
+  This is the only boilerplate a C++23 component has, and the C++26 tier
+  (4.7) generates it. Names exist only in this table. A system that never
+  asks for a name does not link them; where an identifier is needed at run
+  time it is a compile-time hash of the name.
+- Operations are member functions listed in the description and called
+  through a typed handle (`rtt3::caller<&Controller::reset>`), with
+  own-thread and client-thread execution and an asynchronous `send` that
+  returns a typed handle. Signatures are handled with variadic templates,
+  `std::invoke` and `std::tuple`; engine messages are
+  `std::move_only_function` in fixed-capacity storage.
+- Properties are ordinary data members listed in the description. Reading
+  and writing them from a file is an `rtt3-reflect` feature.
 
 ### 4.5 Compile-time deployment
 
@@ -291,399 +302,260 @@ A deployment is a type listing components, activities and connections:
 
 ```cpp
 using App = rtt3::deployment<
-    rtt3::node<Sensor,     rtt3::periodic<1'000'000 /*ns*/, rtt3::priority<80>>>,
-    rtt3::node<Controller, rtt3::periodic<1'000'000,        rtt3::priority<79>>>,
-    rtt3::node<Driver,     rtt3::triggered<&Driver::command_in>>,
-    rtt3::link<&Sensor::state,       &Controller::state,   rtt3::policy::data>,
-    rtt3::link<&Controller::command, &Driver::command_in,  rtt3::policy::buffer<8>>
+    rtt3::node<Sensor,     rtt3::periodic<1ms, rtt3::priority<80>>>,
+    rtt3::node<Controller, rtt3::periodic<1ms, rtt3::priority<79>>>,
+    rtt3::node<Driver,     rtt3::triggered<&Driver::command_in>, rtt3::tag<"left">>,
+    rtt3::node<Driver,     rtt3::triggered<&Driver::command_in>, rtt3::tag<"right">>,
+    rtt3::link<&Sensor::state,       &Controller::state,                    rtt3::policy::data>,
+    rtt3::link<&Controller::command, rtt3::at<"left",  &Driver::command_in>, rtt3::policy::buffer<8>>,
+    rtt3::link<&Controller::command, rtt3::at<"right", &Driver::command_in>, rtt3::policy::buffer<8>>
 >;
-
-int main() { App app; return app.run(); }
-```
-
-This works in C++17 through `template<auto>` parameters. What the compiler
-does with it:
-
-- **Validation**: port value types match, every required input is
-  connected, no input has two writers unless its policy allows it, the
-  triggering port belongs to the node. Failures are `static_assert`s; under
-  C++20 they are concept failures with clearer messages.
-- **Storage**: all components, channels and buffers are members of `App`
-  with sizes known at compile time, so nothing is allocated at start-up and
-  the whole deployment can be placed in static storage.
-- **Dispatch**: `rtt3::component<Derived>` is CRTP, so `updateHook` and the
-  port read and write calls are direct, inlinable calls. With the C++23
-  layer, deducing `this` removes the CRTP parameter from user code.
-- **Scheduling**: nodes that share a period and priority can be folded into
-  one thread with a fixed execution order, computed from the link graph at
-  compile time (topological order, cycles reported as errors unless
-  explicitly broken with a delayed link).
-- **Start-up**: the configure, start and stop order is a constexpr sequence,
-  replacing `StartStopManager` and string-keyed factories.
-- **Dead code**: no component factories, name tables or type registries are
-  linked unless `rtt3-reflect` is used. LTO is on by default for static
-  deployments.
-
-Mixed deployments are supported: `App` can expose its nodes to
-`rtt3-reflect` (`rtt3::reflect::expose(app)`), which registers name tables so
-runtime tooling can inspect or attach additional dynamically loaded
-components. Dynamically loaded components register through the
-`rtt3::plugin::registrar` template (4.9).
-
-Systems with more than one instance of a component type need
-instance tags (`rtt3::node<Driver, ..., rtt3::tag<left>>` and
-`rtt3::link<rtt3::at<left, &Driver::command_in>, ...>`); this is part of the
-first design, not a follow-up.
-
-### 4.6 C++23 opt-in layer
-
-Added when the consumer's standard allows it, never required:
-
-- Concepts: `rtt3::port_data`, `rtt3::component_type`,
-  `rtt3::connectable<Out, In>`; used to constrain the same templates that
-  C++17 guards with `static_assert`.
-- `std::expected<T, rtt3::errc>` returning variants of configuration-time
-  calls (`connect`, `configure`, loader functions) next to the `bool`
-  returning ones.
-- Deducing `this` for components, as above.
-- String-literal template parameters for naming
-  (`rtt3::named<"state", &Controller::state>`), feeding the same tables as the
-  C++17 form.
-- `std::span` for buffer and bulk port access, `std::move_only_function` for
-  one-shot engine messages, `constexpr` containers for larger deployment
-  graph checks, `std::format`/`std::print` sinks in the non-real-time logger,
-  `[[likely]]`, `std::unreachable`, `std::to_underlying`, `std::source_location`.
-- Possible later: a `std::generator`/coroutine based alternative to
-  `updateHook`, and modules (`import rtt;`) once toolchain support is settled.
-
-### 4.7 Lock-free and real-time internals
-
-- Reimplement `DataObjectLockFree`, `BufferLockFree`, `AtomicQueue`,
-  `AtomicMWSRQueue`, `ListLockFree` and `TsPool` on `std::atomic`, with
-  documented memory orders, ABA handling and cache-line alignment
-  (`std::hardware_destructive_interference_size`).
-- Add single-producer/single-consumer variants and let the static
-  deployment pick them when the link graph proves one writer and one reader.
-- Verification: TSan in CI, stress tests on both x86-64 and ARM hardware
-  (4.3), and model checking of the queue
-  and data-object algorithms (for example with Relacy or a similar tool).
-- `ExecutionEngine`: fixed-capacity message queue of non-allocating
-  callables; `SendHandle` kept in the classic layer.
-- `Signal`/`Handle` reduce to what event ports need.
-
-### 4.8 C++26 reflection layer (GCC 16)
-
-A third opt-in tier above the C++23 layer. It removes the remaining
-boilerplate of the typed API (port lists, name tables, argument
-descriptions, typekits) by generating them from the declarations.
-
-**What GCC 16 provides.** Reflection is experimental and off by default; it
-needs `-std=c++26 -freflection` and the `<meta>` header. Status below is
-taken from the GCC 16 release notes and the cppreference support table; it
-has not been compile-tested here, because this plan was written on a
-machine with GCC 13 only.
-
-| Paper | Feature | Use in this fork |
-|---|---|---|
-| P2996R13 | `^^` operator, splicers `[: :]`, `std::meta::info`, `<meta>` queries | Everything below |
-| P3394R4 | Annotations, `[[=value]]` | Port, operation and property metadata |
-| P3096R12 | Function parameter reflection | Operation argument names and types |
-| P3293R3 | Splicing a base class subobject | Typekits for derived structs |
-| P3491R3 | `define_static_string`, `define_static_object`, `define_static_array` | Moving generated tables into static storage |
-| P3795R2 | Reflection clean-ups | - |
-| P1306 | Expansion statements, `template for` (experimental) | Iterating members without recursive templates |
-
-To confirm on a real GCC 16 before design freeze: P3560 (exceptions as the
-error model of `std::meta` functions) and P3068 (constexpr exceptions) were
-not confirmed by the sources available, and they decide how reflection
-errors surface as diagnostics. Mainline Clang and MSVC are reported to have
-no P2996 support yet, so for now this tier is GCC only.
-
-**Gating rules.**
-
-- Enabled only when `__cpp_impl_reflection` and `__cpp_lib_reflection` are
-  defined. No other macro or configure switch.
-- Header-only, in its own directory (`rtt3/meta/`). The built libraries never
-  contain or depend on reflection, so one binary of `rtt3-core` and
-  `rtt3-reflect` serves C++17, C++23 and C++26 consumers.
-- Reflection is a second *producer* of the same constexpr tables the C++17
-  API fills by hand (4.4). It adds no new runtime data structure. Every
-  feature below therefore has a C++17 spelling, and CI checks that both
-  spellings yield identical tables for the same component.
-- `<meta>` is included only from `rtt3/meta/` headers, because of its compile
-  time cost; phase 0 benchmarks track it.
-
-**4.8.1 Port discovery.** The explicit list
-`static constexpr auto ports = rtt3::ports(&Controller::state, ...)` becomes
-optional. `rtt3::meta::ports_of<T>()` walks
-`nonstatic_data_members_of(^^T, ctx)`, keeps members whose type is a
-specialisation of `rtt3::input_port` or `rtt3::output_port` (`template_of`,
-`template_arguments_of`), and returns member pointers through splices:
-
-```cpp
-struct Controller : rtt3::component<Controller> {
-    rtt3::input_port<JointState>    state;     // found by reflection
-    rtt3::output_port<JointCommand> command;
-    void update();
-};
-```
-
-If a component declares both an explicit list and is reflected, the
-explicit list wins, which lets a component hide a port from discovery.
-
-**4.8.2 Names without strings in the object.** `identifier_of(member)`
-supplies the port name; `define_static_string` places it in read-only
-storage and the name table holds a `string_view` to it. This replaces both
-the C++17 `{name, member pointer}` table and the C++23
-`rtt3::named<"state", &Controller::state>` form, and the compile-time hash
-used for runtime identifiers (4.4) is computed from the same identifier.
-The classic `getPort("state")` keeps working through `rtt3-reflect` with no
-registration code written by the user.
-
-**4.8.3 Annotations for metadata.** Metadata that today is set by runtime
-calls (`.doc("...")`, `addEventPort`, `addOperation(...).arg(...)`,
-`OwnThread`) becomes constant annotations read with `annotations_of`:
-
-```cpp
-struct Driver : rtt3::component<Driver> {
-    [[=rtt3::doc("Joint command"), =rtt3::event]]
-    rtt3::input_port<JointCommand> command_in;
-
-    [[=rtt3::property, =rtt3::doc("Maximum velocity"), =rtt3::unit("rad/s")]]
-    double max_velocity = 1.0;
-
-    [[=rtt3::operation(rtt3::own_thread), =rtt3::doc("Clear a latched fault")]]
-    bool reset(int axis);
-
-    [[=rtt3::name("status")]]             // override the identifier
-    rtt3::output_port<Status> status_out;
-};
-```
-
-- Ports: `rtt3::event`, `rtt3::required`, `rtt3::doc`, `rtt3::name`, and a
-  default policy (`rtt3::policy::buffer<8>`).
-- Properties: annotated data members form the property set; the `.cpf`
-  marshaller in `rtt3-reflect` iterates them.
-- Operations: annotated member functions. `parameters_of` gives argument
-  types and names, replacing `ArgumentDescription` and the hand-written
-  `.arg("axis", "...")` chain. A parameter has a usable name only when all
-  declarations of the function agree on it; where they do not, the table
-  falls back to `arg0`, `arg1`, as the classic API does.
-- Annotation types are plain structural types in `rtt3-core`. The
-  `[[=...]]` syntax is C++26 only and is not hidden behind a macro: a
-  component header that uses annotations is a C++26 header. A component
-  that must also compile as C++17 supplies the same data through the
-  `rtt3::describe<T>` template (4.9) instead, using the same annotation
-  types as ordinary values.
-
-**4.8.4 Typekits from reflection.** For aggregate data types, structure
-decomposition (member names, member types, bases via `bases_of`, enum
-value names via `enumerators_of`) is generated in `rtt3-reflect` from the
-type alone. This covers what Boost.Serialization `serialize()` functions
-and typegen-generated typekits do today for plain structs and enums, and
-is the recommended long-term answer to open question 3. Hand-written
-typekits remain for types that are not aggregates or need a custom view.
-
-**4.8.5 Deployment described as a struct.** The `rtt3::deployment<...>` type
-list (4.5) gains an equivalent where nodes are data members:
-
-```cpp
-struct App {
-    [[=rtt3::periodic(1ms), =rtt3::priority(80)]] Sensor     sensor;
-    [[=rtt3::periodic(1ms), =rtt3::priority(79)]] Controller ctrl;
-    [[=rtt3::triggered_by(&Driver::command_in)]] Driver     left, right;
-
-    static constexpr auto links = rtt3::links(
-        rtt3::link(&App::sensor, &Sensor::state,       &App::ctrl,  &Controller::state),
-        rtt3::link(&App::ctrl,   &Controller::command, &App::left,  &Driver::command_in),
-        rtt3::link(&App::ctrl,   &Controller::command, &App::right, &Driver::command_in));
-};
 
 int main() { return rtt3::run<App>(); }
 ```
 
-- Instances are identified by their data member, which gives multiple
-  instances of one component type without the `rtt3::tag` mechanism.
-- The same validation, scheduling fold and start-up ordering as 4.5 run
-  over the reflected members. Iteration uses `template for` where it is
-  reliable, which replaces recursive template instantiation and should
-  lower compile time on large deployments.
-- Diagnostics improve: checks can build messages from identifiers
-  ("input `App::right.command_in` has no writer") using constexpr
-  `static_assert` messages.
-- Optional `rtt3::autowire<App>`: connect outputs to inputs whose name and
-  value type both match, with ambiguity being a compile error. Off by
-  default; explicit links stay the norm.
-- `rtt3::reflect::expose(app)` (4.5) needs no per-component registration,
-  since names come from 4.8.2.
+What the compiler does with it:
 
-**Not planned.** `define_aggregate` (generating new class types, for
-example message structs or structure-of-arrays buffers) is left out until
-there is a concrete need; generated types are hard to debug and document.
-Contracts, also experimental in GCC 16, are a separate topic from this
-tier.
+- **Validation**: value types match, every required input is connected, no
+  input has two writers unless its policy allows it, triggering ports
+  belong to their node. Failures are concept or `static_assert` errors with
+  constexpr-built messages.
+- **Storage**: components, channels and buffers are members of `App` with
+  sizes known at compile time. Nothing is allocated at start-up and the
+  deployment can sit in static storage.
+- **Scheduling**: nodes that share a period and priority can be folded into
+  one thread with a fixed execution order, computed from the link graph
+  (topological order; cycles are errors unless broken with a delayed link).
+- **Channel selection**: where the graph proves one writer and one reader,
+  a single-producer single-consumer channel is used.
+- **Start-up**: the configure, start and stop order is a constant sequence.
+  `rtt3::run` returns the first `expected` error, with the node it came from.
+- **Dead code**: no factories, name tables or type descriptions are linked
+  unless `rtt3-reflect` is used.
 
-**Risks specific to this tier.** The feature is behind an experimental
-flag in one compiler, and behaviour may change in GCC 16.x point releases
-and GCC 17. Hence the strict rule that it only produces tables the C++17
-API can also produce: if the tier has to be withdrawn or reworked, no
-component loses functionality, only convenience. Private members need
-`std::meta::access_context::unchecked()`; the plan is to reflect public
-members only by default and require a friend declaration or explicit list
-for private ports.
+`rtt3::reflect::expose(app)` makes a static deployment visible to runtime
+tooling and lets dynamically loaded components attach to it.
 
-### 4.9 Macro policy
+### 4.6 Runtime layer (`rtt3-reflect`)
 
-The tree has roughly 375 `#define`s besides include guards. The rule for
-the fork: a macro is allowed only where the language has no other
-mechanism, and never in the API a component author writes against.
+A new design, not a port of the classic interfaces. Scope:
 
-| Today | Replacement |
+- Name tables built from `rtt3::describe<T>`: look up a node, port,
+  property or operation by name and obtain a type-erased handle.
+- Type-erased connection of two ports by name, with the type check done by
+  comparing compile-time type identifiers. This is the one place a runtime
+  type check remains.
+- Type descriptions for data types (member names and types, enum value
+  names), supplied through `describe<T>` in C++23 and generated in C++26.
+  They drive property files, logging of port data and any transport.
+- Property files: load and save the described properties of a component.
+  Format is open question 10.
+- Runtime component loading from shared libraries (4.8).
+- An introspection interface sufficient for a task browser or reporter to
+  be written against it. Those tools themselves are outside this plan.
+
+### 4.7 C++26 reflection tier (GCC 16)
+
+An optional tier that generates the `describe<T>` tables from the
+declarations themselves.
+
+**What GCC 16 provides.** Reflection is experimental and off by default; it
+needs `-std=c++26 -freflection` and the `<meta>` header. Status below is
+from the GCC 16 release notes and the cppreference support table; it has
+not been compile-tested here, as this plan was written on a machine with
+GCC 13 only.
+
+| Paper | Feature | Use here |
+|---|---|---|
+| P2996R13 | `^^` operator, splicers, `std::meta::info`, `<meta>` queries | Everything below |
+| P3394R4 | Annotations, `[[=value]]` | Port, operation and property metadata |
+| P3096R12 | Function parameter reflection | Operation argument names and types |
+| P3293R3 | Splicing a base class subobject | Type descriptions for derived structs |
+| P3491R3 | `define_static_string`, `define_static_object`, `define_static_array` | Placing generated tables in static storage |
+| P3795R2 | Reflection clean-ups | - |
+| P1306 | Expansion statements, `template for` (experimental) | Iterating members without recursive templates |
+
+To confirm on a real GCC 16 before design freeze: P3560 (error handling in
+`std::meta` functions) and P3068 (constexpr exceptions) were not confirmed
+by the sources available. Mainline Clang and MSVC are reported to have no
+P2996 support yet.
+
+**Rules.**
+
+- Enabled only when `__cpp_impl_reflection` and `__cpp_lib_reflection` are
+  defined. Header-only, under `rtt3/meta/`; the built libraries never
+  depend on it.
+- Reflection fills the primary template of `rtt3::describe<T>`. An explicit
+  specialisation always wins. It adds no runtime data structure of its own,
+  and CI checks that a reflected and a hand-written description of the same
+  component are identical.
+- `<meta>` is included only from `rtt3/meta/` because of its compile-time cost.
+
+**Uses.**
+
+- *Port discovery*: walk `nonstatic_data_members_of(^^T, ctx)` and keep
+  members whose type is a specialisation of a port template.
+- *Names*: `identifier_of(member)`, placed in read-only storage with
+  `define_static_string`.
+- *Annotations* replace the remaining entries of the description:
+
+  ```cpp
+  struct Driver {
+      [[=rtt3::doc("Joint command"), =rtt3::event]]
+      rtt3::input_port<JointCommand> command_in;
+
+      [[=rtt3::property, =rtt3::unit("rad/s")]]
+      double max_velocity = 1.0;
+
+      [[=rtt3::operation(rtt3::own_thread), =rtt3::doc("Clear a latched fault")]]
+      std::expected<void, rtt3::error> reset(int axis) noexcept;
+
+      void update() noexcept;
+  };
+  ```
+
+  Argument names come from `parameters_of`. A header using `[[=...]]` is a
+  C++26 header; there is no wrapper macro.
+- *Type descriptions* for aggregate data types and enums, generated from
+  the type alone (`nonstatic_data_members_of`, `bases_of`,
+  `enumerators_of`). This removes the need for typekits for plain structs.
+- *Deployment as a struct*: nodes are data members with activity
+  annotations, so instances are identified by member instead of by tag.
+  The same validation as 4.5 runs over the reflected members.
+- *Diagnostics* that name the offending member, for example
+  "input `App::right.command_in` has no writer".
+
+**Not planned.** `define_aggregate` (generating new class types) until
+there is a concrete need. Contracts, also experimental in GCC 16, are a
+separate topic.
+
+**Risk.** The feature is behind an experimental flag in one compiler and
+may change in later GCC releases. Because it only produces tables that can
+also be written by hand, withdrawing or reworking the tier costs
+convenience, not function. Only public members are reflected by default.
+
+### 4.8 Macro policy
+
+A macro is allowed only where the language has no other mechanism, and
+never in the API a component author writes against.
+
+| RTT 2.x | rtt3 |
 |---|---|
-| `ORO_CREATE_COMPONENT`, `ORO_LIST_COMPONENT_TYPE`, `ORO_CREATE_COMPONENT_LIBRARY`, `ORO_CREATE_COMPONENT_TYPE` | `rtt3::plugin::registrar<T>` (below) |
-| `ORO_SERVICE_PLUGIN`, `ORO_SERVICE_NAMED_PLUGIN`, `ORO_GLOBAL_SERVICE_*_PLUGIN` | The same registrar, for service types |
-| `ORO_main` (`os/main.h`) | Plain `main` calling `rtt3::run<App>()` |
-| `OROBLD_*`, `OROPKG_*`, `OROCFG_*`, `ORONUM_*` configuration macros (`rtt-config.h`) | Generated `rtt3/config.hpp` with `inline constexpr` values, consumed by `if constexpr` and template specialisation |
-| `OROCOS_TARGET` and the `fosi` function macros | Deleted; there is one target and `rtt3::os` calls Linux directly (4.3) |
-| `oro_atomic_*`, `ORO_SCHED_*`, `ORO_*_PRIORITY` constants | `std::atomic`, scoped enums, `constexpr` values in `rtt3::os` |
-| Token pasting and stringising helpers (`ORO_CONCAT_LINE`, `*_str`) | Deleted with their users |
-| `BOOST_STATIC_ASSERT`, `BOOST_PP` repetition for signatures up to N arguments | `static_assert`, variadic templates |
-| Deprecation and unused-argument macros | `[[deprecated]]`, `[[maybe_unused]]`, `[[nodiscard]]` |
-| Logger source-location macros | `std::source_location` default arguments from C++20; no location under C++17 |
+| `ORO_CREATE_COMPONENT`, `ORO_LIST_COMPONENT_TYPE`, `ORO_CREATE_COMPONENT_LIBRARY` | `rtt3::plugin::registrar<T>` (below) |
+| `ORO_SERVICE_PLUGIN` family | The same registrar |
+| `ORO_main` | Plain `main` calling `rtt3::run<App>()` |
+| `OROBLD_*`, `OROPKG_*`, `OROCFG_*` configuration macros | Generated `rtt3/config.hpp` with `inline constexpr` values, used with `if constexpr` |
+| `OROCOS_TARGET`, `fosi` function macros, `oro_atomic_*` | Deleted; `rtt3::os` and `std::atomic` |
+| Token pasting and stringising helpers | Deleted with their users |
+| Preprocessor repetition for signatures up to N arguments | Variadic templates |
+| Deprecation and unused-argument macros | Standard attributes |
+| Logger file and line macros | `std::source_location` default arguments |
 
-**Registration without macros.** A component library names its exported
-types with one line per type at namespace scope:
-
-```cpp
-template class rtt3::plugin::registrar<Sensor>;               // name from Sensor::type_name or describe<Sensor>
-inline const rtt3::plugin::registrar<Driver> reg{"Driver"};   // or given explicitly
-```
-
-The registrar's constructor adds a typed factory to a registry owned by
-`librtt3-reflect`; the loader opens the library and reads what was added.
-This removes the unversioned `extern "C"` entry points, the weak-symbol
-`Factories` map and the one-component-per-library restriction of
-`ORO_CREATE_COMPONENT`. Under C++26 the name defaults to the reflected
-type identifier. Static deployments do not use registrars at all. The
-exact spelling (explicit instantiation against an `inline` variable) is to
-be settled in phase 4 with a test that the registration survives
-`--gc-sections` and static archives.
-
-**Metadata without macros.** Everything a macro or runtime call used to
-attach to a component is a constant expression found through one
-customisation point:
+**Registration without macros.** Needed only for runtime loading. A
+component library names its exported types with one line per type at
+namespace scope:
 
 ```cpp
-template <> inline constexpr auto rtt3::describe<Controller> = rtt3::component_info{
-    rtt3::name{"Controller"},
-    rtt3::port{&Controller::state,   "state",   rtt3::doc{"Measured joint state"}},
-    rtt3::port{&Controller::command, "command"},
-};
+inline const rtt3::plugin::registrar<Sensor> sensor_registration;
 ```
 
-A component may instead declare the same value as a static member; under
-C++26 the primary template of `describe` is filled by reflection (4.8).
-The three forms produce the same table.
+The registrar adds a typed factory, named from `describe<Sensor>`, to a
+registry owned by `librtt3-reflect`; the loader opens the library and reads
+what was added. There are no `extern "C"` entry points. The exact spelling
+is settled with a test that registration survives static archives and
+`--gc-sections`.
 
-**Macros that remain**, all internal to library headers:
+**Macros that remain**, all internal to library headers: include guards or
+`#pragma once`; one symbol-visibility macro from a generated export header;
+`#if` on the two reflection feature-test macros to include the C++26 tier;
+the test framework's assertion macros in tests. CI fails on any new
+`#define` outside an allow-list.
 
-- Include guards (or `#pragma once`).
-- One symbol-visibility macro from a generated export header
-  (`RTT3_EXPORT`); there is no language alternative for shared libraries.
-- `#if` on standard feature-test macros, to decide whether the C++23 and
-  C++26 headers are included. Selection *within* a tier uses concepts,
-  `requires` and `if constexpr`.
-- The test framework's own assertion macros, in tests only.
+### 4.9 Lock-free and real-time internals
 
-CI enforces this with a check that fails on any new `#define` outside an
-allow-list.
+- New implementations of the data object, multi-writer buffer, queues and
+  memory pool on `std::atomic`, with documented memory orders, ABA handling
+  and cache-line alignment, plus single-producer single-consumer variants.
+- Verification: TSan in CI, stress tests on both x86-64 and ARM hardware,
+  and model checking of the algorithms (for example with Relacy).
+- Execution engine: a fixed-capacity queue of non-allocating callables.
+- Rule for all code reachable from `update()`: no allocation, no blocking
+  without priority inheritance, no exceptions, no `std::string` construction.
 
 ## 5. Phasing
 
-Each phase ends with the full test suite green on the C++17 and C++23 jobs.
+Each phase ends with tests green on x86-64 and AArch64.
 
 | Phase | Content | Exit criterion |
 |---|---|---|
-| 0. Baseline | Fork, new CMake, CI, port tests off Boost.Test, benchmark harness (port write/read latency, operation call cost, start-up time, binary size, compile time) | Existing behaviour measured and reproducible |
-| 1. Strip | Remove CORBA, all non-Linux OS targets, rosbuild/catkin, Xerces, assembler atomics; mechanical Boost to `std` replacement | `rtt/os`, `base`, `internal` free of Boost except `fusion`/`function_types` |
-| 2. Signatures | Variadic rewrite of the operation machinery | No `fusion`, `mpl` or `function_types`; compile time down measurably |
-| 3. OS layer | Linux-only `rtt3::os`, pmr memory, logger split, graceful downgrade without real-time privileges, AArch64 cross build and CI | No non-Linux code left; tests pass on x86-64 and AArch64; latency baseline recorded on a PREEMPT_RT ARM board |
-| 4. Library split | Separate `rtt3-core` from `rtt3-reflect` and `rtt3-scripting`; move to the `rtt3` namespace, header path and package names; registrar replaces the component and plugin macros; classic API still implemented the old way | Core links with no name tables or `TypeInfo`; fork and RTT 2.x install side by side and load into one test process |
-| 5. Typed ports | New core ports, channels and lock-free primitives; classic ports become wrappers | Classic tests pass on wrappers; write/read latency no worse than baseline |
-| 6. Static deployment | `rtt3::deployment`, validation, scheduling fold, `expose` bridge | Example system runs with zero allocations after `main` starts and no string lookups |
-| 7. Typed operations, properties, services | Same pattern as ports | Classic layer fully implemented on the typed core |
-| 8. C++23 layer | Concepts, `expected`, deducing `this`, named NTTPs | Same examples written both ways produce equivalent binaries |
-| 9. C++26 reflection | `rtt3/meta/` tier on GCC 16: port discovery, names, annotations, reflected typekits, struct deployments | Reflected and hand-written tables identical in CI; tier can be disabled with no loss of function |
-| 10. Release | Migration guide, deprecation attributes on classic calls that have typed equivalents, API and ABI policy | Tagged 3.0 |
+| 0. Baseline | Fork, new CMake and CI beside the old tree, benchmark harness, RTT 2.x numbers recorded on desktop and ARM board | Reproducible baseline; empty `rtt3` libraries build and install next to RTT 2.x |
+| 1. OS layer | `rtt3::os`, memory locking, graceful downgrade, logger front end, simulated clock | Thread, timing and lock tests pass; wake-up latency measured on the ARM board |
+| 2. Lock-free primitives | Data object, buffers, queues, pool | Stress and model-checking tests pass on both architectures |
+| 3. Components and ports | `component` concept, ports, channels, policies, `connect`, activities, lifecycle, error type | Hand-wired example runs; port latency no worse than baseline |
+| 4. Static deployment | `rtt3::deployment`, validation, scheduling fold, channel selection, `run` | Example system runs with zero allocations after start-up and no string handling |
+| 5. Operations and properties | `describe<T>`, typed callers, engine messages | Operation call cost no worse than baseline |
+| 6. Runtime layer | `rtt3-reflect`: names, type-erased connect, type descriptions, property files, registrar and loader, `expose` | A static deployment can be inspected and extended at run time; an RTT 2.x and an rtt3 component load into one process |
+| 7. C++26 reflection | `rtt3/meta/` on GCC 16 | Reflected and hand-written descriptions identical in CI |
+| 8. Release | Delete the old `rtt/` tree, migration guide with a worked port of a real component, API and ABI policy | Tagged 3.0 |
 
-Phases 1 to 3 are low-risk and independent of the design questions below.
-Phases 4 to 7 depend on them.
+Phases 1 and 2 do not depend on any open question. Phases 3 to 5 depend
+on questions 2 and 3; phase 6 on questions 1, 4 and 10.
 
 ## 6. Risks
 
-- **Operation machinery rewrite**: scripting and `OperationCaller` both sit
-  on it. Mitigation: do it before the library split, with the existing tests.
-- **Lock-free rewrites** can introduce rare ordering bugs. Mitigation: 4.7
-  verification, and keep the old algorithms' structure where it is sound.
-- **Compile time and error quality** of the deployment templates on large
-  systems. Mitigation: benchmark from phase 0, keep the checks in constexpr
+- **No automatic migration.** Every existing component has to be ported by
+  hand. Mitigation: side-by-side loading, a migration guide written against
+  a real component, and a mapping table from each classic call to its
+  `rtt3` equivalent.
+- **No inherited regression net.** The old tests do not compile against the
+  new API. Mitigation: treat them as a checklist of behaviours, and port
+  the lock-free and activity tests first.
+- **Lock-free rewrites** can introduce rare ordering bugs that x86 hides.
+  Mitigation: 4.9 verification on ARM.
+- **Compile time and error quality** of deployment templates on large
+  systems. Mitigation: benchmark from phase 0; keep checks in constexpr
   functions over index arrays instead of deep recursive templates.
-- **Two APIs** double the documentation and support surface until the
-  classic layer is frozen.
-- **Ecosystem**: OCL (deployer, taskbrowser, reporting), typegen/orogen and
-  rtt_ros integration all depend on the parts being moved into `rtt3-reflect`.
-  They are out of this plan but will need matching forks or will stop working.
-- **Licence**: the tree is GPL v2 with a linking exception; new code in the
-  fork needs a decision before the first external contribution.
+- **Compiler floor on the target.** GCC 14 is recent for board vendor
+  toolchains (open question 6).
+- **Ecosystem.** OCL (deployer, taskbrowser, reporting), typegen/orogen and
+  rtt_ros integration do not work with `rtt3` and are outside this plan.
+- **Licence.** The tree is GPL v2 with a linking exception. Code written
+  new for `rtt3` could be licensed differently, but anything derived from
+  the existing sources cannot; this needs a decision before work starts.
 
 ## 7. Open design questions
 
-1. **Fork identity**: decided. Namespace `rtt3`, separate header path,
-   library and package names; the classic API is reached through a
-   `namespace RTT = rtt3::classic;` alias (section 3).
-2. **Scripting**: port the Spirit Classic parsers to a maintained parser
-   (Spirit X3, PEGTL, hand-written), freeze the module as legacy, or drop it?
-   It is 111 files and the last user of Spirit Classic and Boost.Graph.
-3. **Typekits and Boost.Serialization**: keep Serialization for structure
-   decomposition in `rtt3-reflect`, or replace it with an aggregate
-   reflection approach (Boost.PFR style now, C++26 reflection later)? This
-   also decides whether existing generated typekits remain usable.
-4. **Inter-process transport**: with CORBA gone, is the POSIX mqueue
-   transport enough, should it be dropped as well, or is a new transport
-   (shared memory, Zenoh, DDS) part of the fork's scope?
-5. **Dynamic reconfiguration in static deployments**: must connections in a
-   compile-time deployment be changeable at run time (disconnect, reconnect,
-   change policy), or are they fixed for the life of the process? Fixed
-   links allow the SPSC selection and inlining described in 4.5.
-6. **Error handling in the core**: with bare-metal out of scope,
-   exceptions are available. Proposed: exceptions or `expected` at
-   configuration time, `bool`/status returns on the update path. Agree?
-7. **Operations threading model**: keep both `OwnThread` and `ClientThread`
-   with `send`/`collect`, or simplify the typed API to one model?
-8. **ARM variants**: is deployment AArch64 only, or is 32-bit ARMv7 also
-   needed? Which board and kernel should be the reference for latency
-   numbers?
-9. **Minimum compilers**: is GCC 9/Clang 10 an acceptable C++17 floor, and
-   GCC 13/Clang 17 for the C++23 layer? Which compiler version does the
-   ARM cross toolchain or board vendor SDK provide? That may set the real
-   floor. MSVC is not supported.
-10. **ABI stability**: is a stable shared-library ABI for `rtt3-reflect`
-    required for separately built component libraries, or is rebuild-the-world
-    acceptable?
-11. **Test framework**: Catch2, GoogleTest, or keep Boost.Test as a
-    test-only dependency to avoid porting 96 files?
-12. **XML properties**: keep `.cpf` with the vendored TinyXML, move to
-    TinyXML-2/pugixml, or change format?
-13. **Reflection tier ambition**: should C++26 reflection stay a pure
-    convenience over the C++17 tables (as planned in 4.8), or may some
-    features, such as reflected typekits, exist only there? The second
-    option is simpler to build but ties those features to GCC 16+.
-14. **Annotations in shared headers**: decided. No wrapper macro;
-    annotated headers are C++26 only and `rtt3::describe<T>` serves older
-    standards (4.9).
-15. **Classic alias**: should `<rtt3/classic/RTT.hpp>` define the
-    `RTT` namespace alias by default, as planned, or only on request, so
-    that classic code has to be edited to say `rtt3::classic::`?
-16. **Project and repository name**: the namespace is `rtt3`; should the
-    package be published under that name too, and does it keep the Orocos
-    name?
+1. **Scripting**: confirm that program scripts and state machines are
+   dropped. If state machines are needed, a small typed state-machine
+   library in C++ is a far smaller job than a new script interpreter.
+2. **Lifecycle**: keep the RTT state model (pre-operational, stopped,
+   running, run-time error, exception, fatal) and hook set as it is, or
+   simplify it?
+3. **Operations threading model**: keep both own-thread and client-thread
+   execution with `send` and `collect`, or reduce the typed API to one model?
+4. **Inter-process transport**: with CORBA gone, is any transport in scope
+   (POSIX message queues as today, shared memory, Zenoh, DDS), or is `rtt3`
+   single-process with bridges written as ordinary components?
+5. **ARM variants**: AArch64 only, or 32-bit ARMv7 as well? Which board and
+   kernel should be the reference for latency numbers?
+6. **Compiler floor**: is GCC 14 / Clang 18 acceptable? Which compiler does
+   your ARM cross toolchain or board SDK provide? GCC 13 would work if
+   deducing `this` and `std::print` are avoided in installed headers.
+7. **Links in static deployments**: fixed for the life of the process, or
+   changeable at run time (disconnect, reconnect, change policy)? Fixed
+   links allow the channel selection and inlining in 4.5.
+8. **ABI stability**: is a stable shared-library ABI needed for separately
+   built component libraries, or is rebuilding everything acceptable?
+9. **Test framework**: Catch2, GoogleTest or doctest?
+10. **Property files**: keep the `.cpf` XML format for existing
+    configuration files, or move to another format (TOML, YAML, JSON)?
+11. **Runtime tooling**: how much by-name runtime access do you actually
+    use (task browser, reporter, deployer XML)? This sets how large
+    `rtt3-reflect` needs to be, and whether phase 6 can shrink.
+12. **Reflection tier ambition**: should C++26 reflection stay a pure
+    convenience over hand-written descriptions (as planned), or may some
+    features exist only there?
+13. **Exceptions from user hooks**: is `noexcept` hooks with termination
+    the right default, with `catch_exceptions` as opt-in, or the reverse?
+14. **Project name and licence**: is the package published as `rtt3`, does
+    it keep the Orocos name, and is the existing licence kept?
