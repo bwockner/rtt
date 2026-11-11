@@ -101,8 +101,9 @@ first.
   covariance. Still open: number of states, number and dimension of
   sensors, whether each sensor's noise is uncorrelated between its
   components, whether to re-linearise between sensor updates, whether the
-  covariance is used downstream, whether the five or six SE(3) bodies
-  are joint-connected links or independent, which error convention is
+  covariance is used downstream, how many true degrees of freedom the
+  five or six SE(3) bodies have and whether the mechanism has closed
+  loops, which error convention is
   used, and the state magnitudes, required
   resolutions and run length that decide whether a mixed-precision
   factored form is safe. See `rtt3/numerics.md`.

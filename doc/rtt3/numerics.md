@@ -582,18 +582,10 @@ A block-indexed covariance type in the block package (n by n blocks of
 6 by 6, one triangle stored) expresses this directly and keeps the
 per-body error convention attached to each block.
 
-**Is SE(3)^n the right state?** Worth asking before optimising it. If
-the n poses are links of one mechanism connected by joints, a pose per
-link carries far more coordinates than the mechanism has degrees of
-freedom, and the constraints between them have to be enforced by
-measurements or by the model. Estimating the joint coordinates (plus a
-base pose if it moves) gives a state of roughly n to n + 6 dimensions
-instead of 6n, with the link poses obtained from the generated forward
-kinematics. That is a reduction of the cubic term by two orders of
-magnitude and would dominate every other measure in this section.
-Estimating full poses per link remains the right choice when the links
-are not rigidly constrained (flexible structures, clearances, independent
-bodies) or when the constraints are exactly what is being estimated.
+**The real degrees of freedom are few.** The n poses are not
+independent: the mechanism has far fewer degrees of freedom than the 6n
+coordinates used to describe it. The next subsection is about detecting
+and using that automatically, which outweighs every other measure here.
 
 **Planar variant.** With SE(2) per body the tangent space has 3n
 dimensions, 15 to 18. The same block scheme applies with 3 by 3 blocks.
@@ -607,6 +599,119 @@ node's state with no allocation.
 update costs more as the dimension grows. A Cholesky factor with a
 QR-based time update, done block-wise, keeps the arithmetic regular and
 is the better match for vector code here.
+
+### Automatic reduction when the true degrees of freedom are few
+
+**The structure being exploited.** If the bodies can only move in k
+independent ways, with k much smaller than 6n, then every admissible
+small motion of all the bodies together is `δξ = B δq`: a 6n by k matrix
+B maps k independent coordinates to the stacked body twists. All
+uncertainty lies in the column space of B, so the full covariance is
+
+    P = B P_q Bᵀ
+
+a 36 by 36 matrix of rank k. This is the rank-deficient matrix that
+should be usable in its full form without paying for its full size
+(`compile-time.md`, "Structured matrices"): the filter works on the
+k by k matrix `P_q`, and the 36 by 36 form exists only when something
+asks for it.
+
+**What reduction buys.** The cubic term goes from 36³ to k³. With k
+between, say, six and twelve, that is a factor of several tens to a few
+hundred, far more than block structure or single precision can give.
+
+There are three ways to find the reduction automatically. They differ in
+what they need to be told and in when the work is done.
+
+**1. From the mechanism's structure, at generation time (preferred).**
+The symbolic model describes the mechanism as bodies connected by joints,
+each joint permitting motion along known screw axes. From that
+description the generator derives everything:
+
+- k, by counting joint freedoms for an open chain or tree;
+- B, as the derivative of each body's pose with respect to the
+  independent coordinates, taken on the tangent space. A symbolic tool
+  that differentiates on Lie groups produces this directly from the
+  forward kinematics. B is itself sparse: body i depends only on the
+  joints between it and the base, so its 6 by k block has few non-zero
+  columns;
+- the reduced filter: each sensor's Jacobian becomes `H B`, with as many
+  columns as that sensor's body has ancestors, and the propagation runs
+  on `P_q`.
+
+Nothing is detected at run time and nothing has variable size. The
+author writes the mechanism once and never states k or B.
+
+For mechanisms with closed loops the independent coordinates are not
+simply the joint coordinates. The loop-closure constraints are known
+symbolically, and B is a basis of the null space of their Jacobian.
+Where that has no convenient closed form it is computed numerically,
+once at configuration if it is constant, or per step by a small
+rank-revealing factorisation if it depends on the configuration.
+
+**2. A numerical check that the structure is what it is believed to be.**
+Whatever the model claims, a build-time or test-time tool evaluates the
+model at sampled configurations and computes numerical ranks: of the
+constraint Jacobian, and of the subspace that the initial covariance and
+the process noise can ever excite through the dynamics. It reports the
+detected number of degrees of freedom and flags any disagreement with
+the model:
+
+- more freedoms in the model than the data supports means redundant
+  states that cost time and can make the filter inconsistent;
+- fewer means a motion the mechanism really has is being treated as
+  impossible.
+
+This is the "automatic detection" in the diagnostic sense. It runs
+off line, uses allocation and iterative decompositions freely, and
+affects no real-time code. It also catches configurations where the rank
+changes, which are the mechanism's singularities.
+
+**3. A thin-factor filter, when no structure is declared.** A
+square-root filter can carry a rectangular factor, 6n by r, with
+`P = S Sᵀ`, and never form the square matrix. The time update appends
+the process-noise factor and re-compresses; if the noise only excites r
+directions, the factor keeps r columns. Costs scale with 6n times r
+squared, not with the cube of 6n.
+
+- It needs no kinematic description, so it works for a state whose
+  redundancy is not understood in advance.
+- The rank is in principle data dependent, which a real-time filter
+  cannot allow. The maximum rank is therefore a compile-time constant,
+  and the re-compression keeps at most that many columns, so sizes and
+  operation counts are fixed.
+- It is an approximation if the true rank exceeds the bound, and that
+  case has to be visible: the discarded part is measured and reported.
+
+**Recommendation.** Use the first for the kinematic states, since the
+mechanism's structure is known and a symbolic model of it is already
+planned; keep the second as a standing test; reserve the third for
+states with no declared structure.
+
+**What stays in full form.**
+
+- The estimator still outputs the pose of every body. Those come from
+  the reduced state through the generated forward kinematics.
+- A consumer that wants the uncertainty of one body gets its 6 by 6
+  block `B_i P_q B_iᵀ`, computed for that body only.
+- A consumer that wants the whole 36 by 36 covariance can have it
+  materialised, but the port type that carries it is the pair
+  `(B, P_q)`, logically a full matrix. This is the one concrete use for
+  the factored matrix types that were otherwise deferred.
+
+**Things that do not fit the rigid model.** Clearances, compliance and
+calibration errors are real motions outside the ideal mechanism. They
+are added as a few extra coordinates with small process noise where they
+matter, each one a deliberate modelling decision. The state then grows
+by those few dimensions, not back to 6n.
+
+**Consequence for the earlier measures.** With k around ten the filter
+is small again. The 6 by 6 block scheme applies to how B is assembled,
+not to the covariance, and the case for single precision largely
+disappears: there is little arithmetic left to vectorise, and double
+precision removes the conditioning concerns at negligible cost. The
+mixed-precision factored form remains relevant only if a large state
+survives the reduction.
 
 ### Applied to the case at hand: an EKF with per-sensor varying covariance
 
@@ -826,9 +931,10 @@ a build with every fast-math option on.
   How many states, how many sensors and of what dimension each? Is each
   sensor's own noise uncorrelated between its components? Should sensors
   be re-linearised between updates? Is the covariance used downstream?
-- The state is SE(3)^n with n of five or six (answered). Are the n
-  bodies links of one mechanism connected by joints, or independent or
-  loosely coupled? Which bodies does each sensor relate? Does one body's
+- The state is SE(3)^n with n of five or six, and the true degrees of
+  freedom are few (answered). Roughly how many, and is the mechanism an
+  open chain or does it have closed loops? Are clearances or compliance
+  estimated? Which bodies does each sensor relate? Does one body's
   dynamics depend on another's? Are there bias or other vector states in
   addition?
 - What is the filter's rate and its share of the cycle time today?
