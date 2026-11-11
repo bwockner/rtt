@@ -210,7 +210,7 @@ struct onboard_snapshot {                     // what the machine's own sensors 
 using payload = std::variant<tape_distance, plumb_alignment, level_reading,
                              ts_polar, ts_position, gnss_position,
                              touch, frame_tie, onboard_snapshot,
-                             offset_measurement, width_measurement>;   // the last two: see
+                             offset_measurement, width_measurement, epoch_tie>;   // the last two: see
                                                                        // "Points measured on a surface"
 
 }
@@ -268,7 +268,9 @@ of link corresponds to something the solver treats as one unknown.
 
 | Link | Assumption | Shared unknown it creates | Evidence that should be kept |
 |---|---|---|---|
-| Pose group | The machine did not move between these observations | One static pose | The stillness statistic over the group's time span, from the on-board sensors |
+| Pose group | No joint moved between these observations | The joint positions | The stillness statistic over the group's time span, from the on-board sensors |
+| Slew epoch | The upper structure was not slewed | The plane's heading | Slew sensor, integrated yaw rate; see "Plane heading" |
+| Base placement | The base was not moved on the ground | Base position and tilt | Track motion, GNSS, base inertial unit |
 | Set-up | The instrument did not move | The instrument's pose (four unknowns if levelled) | A repeated shot to a fixed target at the start and end |
 | Mark | These touches were on the same physical mark | The mark's position | - |
 | Target mounting | The prism or antenna was not re-mounted | Its offset from the reference point | The component version |
@@ -524,6 +526,165 @@ is replaced or a wear pad is added, that is a new version of the
 component and a new unknown; the old observations keep constraining
 everything else.
 
+## Plane heading, and the levels of "nothing moved"
+
+**Heading is an unknown of the session.** External instruments observe
+points in their own frame. To use them, the direction in which the
+mechanism's plane of motion faces, its heading in the instrument's
+frame, has to be known, and it generally is not: it is inferred during
+the calibration from the plane-offset points or from explicit centreline
+points. It is also the quantity most easily disturbed. Any slew or
+movement of the machine changes it, and every observation that relied on
+the old value then belongs to a situation that no longer exists. This is
+expected to be the commonest reason for having to recapture a pose, so
+the data model treats it explicitly.
+
+**How heading is determined, in order of robustness.**
+
+- *One target swept through a joint's range.* A point on a moving link,
+  observed at several joint positions without slewing, traces an arc
+  that lies in a plane parallel to the plane of motion. Fitting that
+  plane gives the heading and the sideways tilt directly. The target's
+  offset from the centre plane does not matter, since it is the same at
+  every position. This needs one prism and no knowledge of any offset.
+- *Explicit centreline points*, far apart. Two points known to lie in
+  the centre plane give the heading; the uncertainty is roughly the
+  point accuracy divided by the horizontal distance between them, so the
+  baseline should be as long as the machine allows.
+- *Points on one surface.* Several points on the same plate share one
+  offset and so lie in a plane parallel to the centre plane; they give
+  the heading without the offset being known.
+- *Mirror pairs*, which give centre-plane points from surface points.
+- *Points on different surfaces with unknown offsets* are the weak case:
+  a difference between the two offsets is indistinguishable from a
+  heading error of that difference divided by the baseline. The
+  observability report flags this.
+- *On-board sources.* A two-antenna GNSS heading, or a slew sensor, tie
+  heading between situations even when the instrument does not.
+
+Heading error is multiplied by reach: at the tool point it produces a
+sideways error of the reach times the heading error. The session plan
+uses that to say how long a baseline or how wide a sweep is needed for
+the accuracy wanted.
+
+**Not one assumption but a nesting of them.** "Same pose" lumps together
+things that change at very different rates. Split, each level is an
+entity with its own identifier, time span and evidence, and each owns
+the unknowns that are constant while it lasts:
+
+| Level | Holds while | Unknowns it owns | Typical evidence |
+|---|---|---|---|
+| Instrument set-up | The instrument is not moved | Instrument pose | Check shot to a fixed target |
+| Base placement | The machine's base is not moved on the ground | Base position and tilt | Track or wheel motion, GNSS, base inertial unit |
+| Slew epoch | The upper structure is not slewed | **Plane heading** | Slew sensor, integrated yaw rate, two-antenna heading |
+| Pose group | No joint is moved | Joint positions | The stillness test over all units |
+
+```cpp
+namespace cal {
+
+using base_placement_id = id<struct base_placement_tag>;
+using slew_epoch_id     = id<struct slew_epoch_tag>;
+
+struct base_placement {
+    base_placement_id id;
+    time_range        span;
+    evidence          stationary;     // what showed the base did not move
+};
+
+struct slew_epoch {
+    slew_epoch_id     id;
+    base_placement_id within;
+    time_range        span;
+    evidence          no_slew;        // slew sensor reading, integrated yaw, with their uncertainty
+};
+
+struct pose_group {                   // replaces the earlier definition
+    pose_group_id id;
+    slew_epoch_id within;
+    time_range    span;
+    double        stillness_statistic;
+    std::optional<onboard_snapshot> sensors;
+};
+
+}
+```
+
+An observation still names only its pose group; the levels above follow
+from it. The point of the nesting is that moving one joint ends a pose
+group but leaves the heading intact, so the heading is determined by all
+the observations of a slew epoch together, across many joint poses, and
+the arc sweep above becomes an ordinary set of observations instead of a
+special procedure.
+
+**What happens when something changes.**
+
+- *A known change ends a level; it invalidates nothing.* If the operator
+  slews, the current slew epoch is closed at that time and a new one
+  begins. Observations in the old epoch remain valid statements about
+  the machine as it then stood. They still constrain everything internal
+  to the mechanism (lengths, offsets, mountings) through their own
+  epoch's heading unknown.
+- *The new epoch starts without a heading.* It needs its own heading
+  observations before anything in it is useful for quantities that
+  depend on heading. The tool reports this as the re-establishment set:
+  the smallest set of observations that makes the new epoch's heading
+  determined, typically one sweep or two centreline points.
+- *An unnoticed change is the real invalidation.* If the evidence shows
+  a slew happened part-way through an epoch, the epoch is suspect.
+  - If the time of the change can be located, from the slew sensor or
+    the yaw rate, the epoch is **split** at that time: observations are
+    re-assigned to the part they fall in. Nothing is lost except that
+    each part now needs enough heading observations of its own.
+  - If it cannot, the epoch's observations that depend on heading are
+    invalid for that purpose and have to be recaptured.
+- *The same applies one level up.* Moving the base ends the base
+  placement and every slew epoch in it.
+
+```cpp
+namespace cal {
+
+struct split {                        // an event: one level instance becomes two
+    node_ref   subject;               // a slew epoch, base placement or pose group
+    time_point at;
+    std::string reason;
+};
+
+}
+```
+
+**Tying epochs together instead of starting from nothing.** A slew does
+not make the new heading entirely unknown if something measured the
+slew. The change reported by a slew sensor, or the integrated yaw rate
+over the move, is an observation relating the headings of two
+consecutive epochs, with its own uncertainty:
+
+```cpp
+namespace cal {
+
+struct epoch_tie {                    // added to the payloads
+    slew_epoch_id from, to;
+    double        heading_change;     // radians
+    tie_source    source;             // slew sensor, integrated gyroscope, two-antenna GNSS
+};
+
+}
+```
+
+With a tie, a new epoch inherits heading from the previous one to within
+the tie's accuracy, and needs fewer external observations, or none, to
+be usable. Without one, each epoch stands alone. Whether the on-board
+tie is accurate enough to avoid recapture is again a question the
+observability report answers for the actual numbers.
+
+**Consequences for planning a session.**
+
+- Do everything that needs one heading before slewing.
+- Sweep a target through each joint's range early in each slew epoch:
+  it establishes the heading and exercises the joint.
+- After any slew, take the re-establishment observations first.
+- Record the slew sensor and the base inertial unit throughout, so that
+  unnoticed changes can be found and located afterwards.
+
 ## How the records become factors
 
 `std::visit` over the payload selects the residual function for that
@@ -618,5 +779,8 @@ expected precision. The following are not in that list and matter.
   of motion for the whole mechanism), on which surfaces are points
   actually measured, and are both sides accessible for mirror pairs?
   Are centrelines marked on the links?
+- Does the machine have a slew sensor, and how accurate is it? Is the
+  base moved during a calibration session, or only slewed? Is sweeping
+  one prism through each joint's range practical?
 - Is a `stale` state for results acceptable in addition to the four
   observation states?
