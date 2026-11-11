@@ -22,6 +22,9 @@ x86-64 and ARM.
   code, and the expected effect of each item is an estimate. Step 0 builds
   the benchmarks; an item that shows no measurable gain is dropped.
 
+File and line references are against `master` at `18a6e04c7`, that is,
+after `toolchain-2.10` was merged into it.
+
 ## 2. Step 0: measure first
 
 A small benchmark suite, kept in `tests/`, run on the desktop and on the
@@ -112,7 +115,7 @@ When TLSF is enabled, the options that let the pool grow through `sbrk`
 and `mmap` are on by default (`rtt/CMakeLists.txt:117-118`), so an
 allocation from a real-time thread can end in a system call and page
 faults. `OperationCaller::send` clones the caller through the real-time
-allocator on every call (`rtt/internal/LocalOperationCaller.hpp:705-709`).
+allocator on every call (`rtt/internal/LocalOperationCaller.hpp:706-710`).
 That allocator is this pool when TLSF is enabled and plain `malloc` when
 it is not (`rtt/os/oro_malloc.h:54`).
 
@@ -153,7 +156,7 @@ in pages from disk.
 - ABI: none.
 
 **D8. The real-time allocator is guarded by one mutex.** TLSF is built
-with locking on (`rtt/os/tlsf/tlsf.c:65`) and the lock is an ordinary RTT
+with locking on (`rtt/os/tlsf/tlsf.c:70`) and the lock is an ordinary RTT
 mutex (`rtt/os/tlsf/target.h:44-45`), so it has no priority inheritance
 until D1 is applied. Everything that uses the real-time allocator from
 several threads contends on it: `rt_string`, `OperationCaller::send` (D5),
@@ -227,8 +230,8 @@ forwards to `getEndpoint()->connected()`, and then calls
 
 **F5. False sharing in the lock-free data object.**
 `DataObjectLockFree<T>::DataBuf` holds the sample, the status and the two
-counters with no alignment, in one array (`rtt/base/DataObjectLockFree.hpp:100-112`,
-`:128`). For small samples, a reader updating its buffer's `read_counter`
+counters with no alignment, in one array (`rtt/base/DataObjectLockFree.hpp:108-120`,
+`:147`). For small samples, a reader updating its buffer's `read_counter`
 invalidates the cache line the writer is filling in the neighbouring
 buffer. The lock-free buffer and its pool deserve the same check.
 
@@ -252,7 +255,7 @@ through the channel selection logic on every read
 queue is non-empty (`rtt/ExecutionEngine.cpp:238`), and
 `TaskContext::dataOnPortCallback` looks the port up in a
 `std::map<PortInterface*, SlotFunction>` for each event
-(`rtt/TaskContext.cpp:448-452`).
+(`rtt/TaskContext.cpp:450-454`).
 
 - Change: cache the cast result when the engine is created. Small gain;
   replacing the map is not worth doing on its own.
@@ -393,6 +396,22 @@ Logging from real-time components, in particular:
   inheritance and that the message text is formatted in the caller, so
   this is suitable for soft real-time use, not a lock-free path. See
   `rtt3-logging-plan.md` for the comparison.
+
+### 3.6 Existing branches in this repository that cover some items
+
+Several of the findings above already have work on unmerged branches,
+inherited from upstream pull requests that were never merged. None of
+them is on `master`. They are starting points to review, not finished
+fixes.
+
+| Item | Branch | State |
+|---|---|---|
+| D1 | `enable-priority-interitance-for-mutexes-with-gnulinux` | One commit setting `PTHREAD_PRIO_INHERIT` on both mutex kinds, unconditionally. Conflicts with `master` in `rtt/os/gnulinux/fosi.h` only because neighbouring functions moved; the change itself is small |
+| D3, D6 | `fix-thread-safe-logger` | One commit, described by its author as a proof of concept, moving logger state to thread-local storage. Merges cleanly; needs review against D3 and D6 |
+| D8 | `master-drop-boost-thread-usage` | Includes a commit that gives TLSF a plain pthread mutex instead of the RTT timed mutex; the rest concerns the macOS target. Conflicts in `fosi.h` |
+| D5, D8 | `tlsf-valgrind-support` | Valgrind annotations for TLSF plus a fix to the pool area size calculation. Merges cleanly |
+| F1 | `meyerj/fix_deadlock_in_concurrent_connection_disconnection` | Finer-grained locking in `ConnectionManager` and the multiple-outputs channel element, with a test; the last commit is marked work in progress. Merges cleanly, touches 21 files |
+| not listed | `master-file-descriptor-activity-locking-and-robustness` | Removes a mutex from `FileDescriptorActivity::trigger()`. Conflicts with the later rework of that class already on `master` |
 
 ## 4. Order of work
 

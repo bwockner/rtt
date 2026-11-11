@@ -568,13 +568,49 @@ The node is an ordinary node: it appears in the graph, is folded into a
 thread with its neighbours, can occupy a slot, and its links can be
 substituted. The call is direct and inlinable.
 
-**Annotations without a framework dependency.** The annotation types
-(`blk::block`, `blk::parameters`, `blk::out`, units, documentation) live
-in one small header-only package with no dependencies, separate from the
-`rtt3` libraries, so a function library that uses them does not depend on
-the real-time framework. The simulator includes the same header or ignores
-the annotations entirely. See open question 19 on what the simulator can
-compile.
+**Start from the simulator's block wrapper.** The simulator already
+defines its blocks with a C++26 reflection wrapper over simple functions,
+so that blocks are easy to generate. That settles two things: the
+simulator is on a reflection-capable GCC, and a working convention for
+"which parameter is what" already exists. `rtt3` should adopt that
+convention, not introduce a second one:
+
+- The wrapper, or the part of it that turns a function into a block
+  description, is extracted into a small header-only package with no
+  dependencies (called `blk` in this document), used by both the simulator
+  and `rtt3`. If it cannot be extracted as it stands, `blk` is written to
+  accept the same function shapes.
+- The mapping table above is therefore provisional. Where it differs from
+  what the simulator's wrapper does today, the wrapper wins, since blocks
+  and generators already depend on it.
+- `rtt3::function_node` adds only what a real-time node needs on top of
+  the shared description: ports, the state object's lifetime, properties
+  from the machine file, the time step, and error state.
+
+**Kept friendly to code generation.** The design constraints that follow
+from blocks being generated:
+
+- A generated function needs no annotation to become a block. Roles come
+  from the signature alone; annotations exist only for documentation,
+  units and overrides, and a generator may omit them.
+- Nothing has to be written in a second place: no registration call, no
+  port list, no name strings.
+- The subset of C++ a block may use is small and stated (plain structs,
+  arithmetic, fixed-size arrays, `std::expected` for errors), so a
+  generator has a simple target and generated blocks are valid port data
+  by construction.
+- Names are stable and derived: parameter names become port names, the
+  function name becomes the block type name. A generator that keeps names
+  stable keeps graphs and recordings valid across regenerations.
+- Wiring is as easy to generate as blocks. A deployment or subsystem is a
+  struct with members and a list of links, with no ordering constraints
+  and no imperative set-up code, so it can be emitted directly from a
+  graph description. A small tool, `rtt3-gen`, reads a graph in the
+  exported graph format (4.6) and writes the corresponding struct, so a
+  controller drawn or assembled in the simulator can be turned into a
+  deployment without hand-editing.
+- Generated and hand-written blocks are indistinguishable to the
+  framework, and can be mixed in one graph.
 
 **Moving a function between the simulator and the real-time system.**
 
@@ -590,26 +626,15 @@ compile.
   observation, 4.6) can be replayed through it offline and the outputs
   compared, with no framework and no simulator running.
 
-**One block definition for two graph engines.** The simulator is itself a
-C++ block graph in the Simulink style, built with GCC, with blocks over
-plain structs and MuJoCo as the physics backend. That makes the two
-systems structurally alike: both execute a graph of blocks connected by
-typed signals. The plan therefore puts the part that understands a block
-into the neutral package, not into `rtt3`:
-
-- `blk::describe<^^pid_step>` yields a constant table for a block: its
-  inputs, outputs, state type, parameter type and time-step parameter,
-  with names, types, units and documentation. It is produced by reflection
-  and depends on nothing but the standard library.
-- `rtt3::function_node` is built on that table. The simulator can build
-  its own graph nodes from the same table with a small adapter of its
-  own, instead of declaring each block's ports a second time.
-- A block library then has exactly one description of each block, and it
-  lives next to the function.
-
-This needs the simulator to be built with GCC 16 in C++26 mode (open
-question 19). If it stays on an older GCC, it can still call the functions
-directly; only the generated description is unavailable to it.
+**One block definition for two graph engines.** The simulator is a C++
+block graph in the Simulink style with MuJoCo as the physics backend, so
+the two systems are structurally alike: both execute a graph of blocks
+connected by typed signals. With the block description shared as above,
+`blk::describe<^^pid_step>` yields one constant table for a block (inputs,
+outputs, state type, parameter type, time step, with names, types, units
+and documentation), and both engines build their nodes from it. A block
+library has exactly one description of each block, and it is the function
+itself.
 
 **Same execution semantics inside a thread.** For a block to behave
 identically in both places, the two graphs must agree on when a block sees
@@ -1463,7 +1488,7 @@ event through a buffered port, and appender components on non-real-time
 threads write it out. That keeps I/O out of the real-time thread, but it
 is not lock-free and not allocation-free: the string is allocated from the
 TLSF pool on every message, and that pool is guarded by one mutex
-(`rtt/os/tlsf/tlsf.c:65`, `rtt/os/tlsf/target.h:44-45`), created without
+(`rtt/os/tlsf/tlsf.c:70`, `rtt/os/tlsf/target.h:44-45`), created without
 priority inheritance. Formatting cost is also paid in the real-time
 thread. The description of OCL here is from knowledge of that project, not
 from reading its source in this session, and should be checked against the
@@ -1667,18 +1692,18 @@ on questions 2 and 3; phase 6 on questions 1, 4 and 10.
     Do you change properties while components are running? Do you use
     attributes or constants separately from properties?
 19. **Portable functions and the simulator**: the simulator is C++ built
-    with GCC, a Simulink-style block graph over plain structs with MuJoCo
-    as the physics backend (answered). Remaining points:
-    - Which GCC version builds the simulator, and can it move to GCC 16
-      in C++26 mode? That decides whether it can share annotated headers
-      and the generated block descriptions.
-    - How is a block defined in the simulator today (a struct with a step
-      function, a free function, registration by name), and how are its
-      ports declared? The neutral block description should be shaped so
-      that existing blocks fit with little change.
+    with GCC, a Simulink-style block graph with MuJoCo as the physics
+    backend, and its blocks are defined by a C++26 reflection wrapper over
+    simple functions, intended for easy code generation (answered).
+    Remaining points:
+    - Can I read the wrapper, or a few example blocks? Its conventions
+      (how inputs, outputs, state, parameters and the time step are
+      recognised) should become the mapping in 4.4 as they are.
+    - What generates the blocks, and does it also generate the wiring
+      between them, or only the functions?
+    - Which GCC version and flags does the simulator build with today?
     - What are the simulator's execution rules: fixed step, multi-rate,
       how are loops broken? The in-thread rules in 4.4 should match them.
     - Is a single-process closed-loop test (controller plus MuJoCo plant
       block, stepped in lock) wanted for CI?
-    - Are subsystems (a group of blocks moved as one unit) something the
-      simulator already has?
+    - Does the simulator already have subsystems?
