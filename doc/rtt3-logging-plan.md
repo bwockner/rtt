@@ -50,6 +50,50 @@ Their designs are the reference for the queue and record layout, and they
 serve as comparison points in the benchmarks. This choice is open
 question 1.
 
+### spdlog, which downstream code uses today
+
+**Is it appropriate?** For non-real-time code, yes. For real-time threads
+on PREEMPT_RT, only with care, and not as a lock-free logger:
+
+| Aspect | spdlog | Consequence for a real-time thread |
+|---|---|---|
+| Filtered call | Atomic level check | Fine |
+| Synchronous loggers | The caller formats and writes through the sink, under the sink's mutex | Not usable: I/O in the caller, and a lock held during I/O |
+| Asynchronous loggers: queue | One `std::mutex` and two condition variables guard a circular queue (checked in `details/mpmc_blocking_q.h` on the `v1.x` branch) | Every message takes a lock shared with all other logging threads and the worker. `std::mutex` has no priority inheritance, so a low-priority logger preempted while holding it can block a real-time one |
+| Asynchronous loggers: wake-up | The producer notifies a condition variable after each push | A possible system call per message |
+| Formatting of the message text | In the calling thread, before queuing (from knowledge of spdlog; the pattern prefix is added by the worker) | Formatting cost in the real-time thread; long messages can allocate |
+| Queue full | Three policies: block the caller, overwrite the oldest, or discard the new message and count it | The default blocks |
+| Output | Worker thread | Fine: no I/O in the caller |
+
+So asynchronous spdlog keeps I/O out of the caller, and the queue lock is
+held only briefly, never during output. That is good enough for soft
+real-time use. It does not meet the rules of the main plan (no lock, no
+system call, no formatting on the update path).
+
+**If real-time threads keep using spdlog for now**, the settings that
+matter are: asynchronous loggers only; overflow policy set to overwrite
+or discard, never block; a queue sized for the worst burst; loggers
+looked up once at configuration, since the registry lookup takes a lock;
+no flush-on-level triggered from real-time threads; short messages.
+
+**Proposal: keep spdlog downstream, and connect the two.** There is no
+need to rewrite existing logging calls.
+
+- Real-time nodes log through `rtt3::log`. Everything else keeps spdlog.
+- An optional adapter library, `rtt3-spdlog`, provides a sink for the
+  drain thread that forwards decoded records to spdlog loggers. Output
+  from both sources then goes through the same spdlog sinks, patterns and
+  files that downstream code already configures, in one stream.
+- With that adapter, the file, rotation and journald sinks of step L4
+  become optional: spdlog already has them. The plan keeps the console
+  sink and the inspection sink in-tree and treats the rest as needed only
+  if the adapter is not used.
+- The adapter is the only part that depends on spdlog and `fmt`; the core
+  libraries stay free of both.
+- The timestamp passed to spdlog is the one taken when the record was
+  written, not when it was drained, so ordering against direct spdlog
+  messages is by true time within the drain interval.
+
 ## 3. Design
 
 ### 3.1 Front end
@@ -267,7 +311,7 @@ allocation or system call in either.
 | L1 | Spike on GCC 16: call-site constant without a macro, compile-time format checking, decode function per call site, reflection formatter for a struct | The four techniques work, or the design in 3.1 to 3.3 is revised |
 | L2 | Ring, record layout, encoder and decoder, drain thread with console sink; level filtering | Round-trip, ring and stress tests pass; alloc guard and syscall filter pass |
 | L3 | Per-thread ring registration tied to node threads, categories per node, machine-file configuration, drop reporting, `every` and `once` | Example deployment logs from its real-time threads with zero allocations and system calls |
-| L4 | File, structured and journald sinks; wall-clock conversion; merge ordering with hold-back | Slow-sink test passes; ordering test passes |
+| L4 | `rtt3-spdlog` adapter sink; wall-clock conversion; merge ordering with hold-back. In-tree file, structured and journald sinks only if the adapter is not adopted | Real-time and spdlog messages appear in one stream in time order; slow-sink test passes |
 | L5 | Flight-recorder mode; fatal-signal dump; shared mapping; `--decode-log` | Crash test passes |
 | L6 | Inspection service integration: live tail, level control, counters | Levels changed and logs followed from a separate process |
 
@@ -303,9 +347,10 @@ any point after L2.
 1. **Build or adopt**: is building in-tree acceptable, or would you prefer
    to wrap an existing asynchronous logger and accept its macros and its
    formatting library?
-2. **Existing logging**: do your components log through `RTT::Logger`,
-   through OCL's real-time logging, or both? Is any tooling built on the
-   current log format or on log4cpp configuration files?
+2. **Existing logging**: downstream code uses spdlog (answered). Are its
+   loggers synchronous or asynchronous, and which overflow policy and
+   sinks are configured? Do real-time components call spdlog directly
+   today? Is any tooling built on the current log format?
 3. **Drop or block for non-real-time threads**: should threads that are
    not real-time also drop when their ring is full (as planned, one rule
    for all), or wait for the drain thread?
@@ -313,7 +358,8 @@ any point after L2.
    machines to make it part of the first version?
 5. **Crash recovery**: is the fatal-signal dump enough, or is the shared
    mapping with an external collector needed?
-6. **Sinks**: which destinations matter on the target (file, journald,
-   network), and is structured output wanted?
+6. **Sinks**: is routing `rtt3` records into the existing spdlog sinks
+   (the adapter) the right default, so that in-tree file sinks can be
+   dropped from the first version? Is structured output wanted?
 7. **Call syntax**: if the natural form `log::warn("...", args)` proves
    unreliable on GCC 16, is `log::warn<"...">(args)` acceptable?

@@ -385,6 +385,15 @@ Logging from real-time components, in particular:
   check the level before building a message, and make sure the port to
   the appenders uses a lock-free buffered connection of adequate size.
 
+- **spdlog in real-time components** (used downstream): use asynchronous
+  loggers only, with the overflow policy set to overwrite or discard
+  rather than the default, which blocks the caller when the queue is
+  full. Look loggers up once in `configureHook`. Note that the
+  asynchronous queue is guarded by a `std::mutex` without priority
+  inheritance and that the message text is formatted in the caller, so
+  this is suitable for soft real-time use, not a lock-free path. See
+  `rtt3-logging-plan.md` for the comparison.
+
 ## 4. Order of work
 
 | Step | Items | ABI effect | Why this order |
