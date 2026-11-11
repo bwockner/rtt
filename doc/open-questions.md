@@ -110,6 +110,10 @@ first.
 - **Filter architecture**: is the existing estimator one filter or a
   cascade, and if a cascade, why? The plan recommends one reduced joint
   filter. See `rtt3/numerics.md`.
+- **Imperfect geometry**: tolerances or calibration accuracy of hinge
+  axes and sensor mountings, rotation rates, and whether compliance is
+  significant. These set how much less a distant sensor is trusted. See
+  `rtt3/numerics.md`.
 - **Unexplained sensor motion**: when a gyroscope reports rotation the
   mechanism model cannot produce, should the system warn, model an extra
   freedom, or switch from the planar to the full model? Where are the

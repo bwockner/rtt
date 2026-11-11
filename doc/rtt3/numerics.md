@@ -911,6 +911,109 @@ observable in practice depends on which of these exist, and the off-line
 rank check described above is the tool that answers it for a given
 sensor layout.
 
+### Uncertainty that grows with the distance between sensor and joint
+
+A measurement taken far down the chain should say less about a joint
+near the root than a measurement taken next to it. Part of that is
+already in the joint filter; the rest has to be modelled, and the model
+is what makes the uncertainty grow with distance instead of a hand-tuned
+factor.
+
+"Distance" here means the number of joints and links between the sensor
+and the joint in question. For a gyroscope the metric distance does not
+matter, since all points of a rigid link share one angular velocity. For
+an accelerometer it does: see the last paragraph.
+
+**What the joint filter already accounts for.**
+
+- *Uncertain rates of the joints in between.* The predicted measurement
+  is a sum over all ancestors, so the innovation covariance contains
+  every intermediate joint's rate uncertainty. The more uncertain joints
+  lie between the sensor and the root, the larger that covariance and
+  the smaller the share of an innovation that is attributed to the root.
+- *Uncertain angles of the joints in between.* The root's axis is seen
+  from the sensor's frame through the rotations of every joint in
+  between. Provided the joint angles are states and the generated
+  measurement Jacobian includes their columns, an error in an
+  intermediate angle is represented, to first order, as an error in how
+  the root's rate projects onto the sensor axes.
+
+Both effects grow with the number of joints in between without any
+special treatment.
+
+**What it does not know unless told.** The mechanism is not ideal. Each
+joint and link adds a small unknown rotation: a hinge axis not exactly
+where the model puts it, a link that twists slightly, a sensor mounted a
+fraction of a degree off. Seen from a sensor far down the chain these
+add up, and their effect on a gyroscope is proportional to the rotation
+rate:
+
+    error in measured rate  ≈  (accumulated misalignment) × (angular velocity)
+
+This matters most for exactly the case discussed. A large in-plane
+rotation, seen through a small accumulated misalignment, appears as a
+small out-of-plane rate. A filter that believes the ideal geometry will
+attribute that leakage to the root's out-of-plane freedom as if it were
+real motion, with full confidence.
+
+**Modelling it: consider parameters.** Each joint and each sensor
+mounting gets a small misalignment vector, nominally zero, with a stated
+standard deviation taken from tolerances or calibration. These are not
+estimated by the filter; they are carried as parameters whose
+uncertainty is accounted for (the Schmidt, or consider, form of the
+filter):
+
+- the symbolic model includes the misalignments, and the generator
+  produces the measurement's sensitivity to each of them. For a
+  gyroscope on link i, only the misalignments between the affected joint
+  and the sensor contribute, each multiplied by the angular velocity
+  downstream of it;
+- the innovation covariance gains a term built from those sensitivities
+  and the misalignment variances. That term grows with every joint
+  between sensor and root, and with the rotation rate. A distant sensor
+  on a fast-moving chain therefore gets a small gain on the root; the
+  same sensor on a slowly moving chain, or a sensor next to the root,
+  gets a large one. This is the distance-dependent uncertainty, derived
+  and not tuned;
+- the filter keeps the cross-covariance between the state and the
+  misalignments, because a misalignment is a constant, not fresh noise
+  at every step. Simply inflating the measurement noise would treat it
+  as independent from sample to sample and leave the filter overconfident
+  after averaging many samples. The cross-covariance is what prevents
+  that;
+- the cost is modest: one extra column per misalignment component in a
+  rectangular cross-covariance block, and no gain computation for them.
+
+**When to estimate them instead.** Misalignments are constant, so they
+can be identified once from recorded motion, off line, and entered as
+calibration values with a much smaller residual uncertainty. That
+shrinks the distance-dependent term directly and is better than
+accounting for a large unknown indefinitely. Compliance that changes
+with load is different: if it matters, it becomes a state with its own
+dynamics, as in "Things that do not fit the rigid model".
+
+**The parity residual scales the same way.** The threshold on the
+unexplained part of a sensor's innovation is set against its expected
+variance, which now includes the misalignment term. A distant sensor on
+a fast chain is allowed a larger unexplained component before anything
+is flagged, and a near one a smaller. Without this, the planar-validity
+monitor would raise false alarms during fast in-plane motion.
+
+**Timing adds a similar term.** If sensors along the chain are sampled at
+slightly different instants, the error is the angular acceleration times
+the time offset, and it accumulates in the same way when measurements
+from different links are combined. Where sample times are known, the
+measurement is predicted at its own time stamp; where only a bound is
+known, the bound enters as a further consider parameter.
+
+**Accelerometers.** Their reading depends on where on the link they are
+mounted, through terms in the angular acceleration and the square of
+the angular velocity times the lever arm. Uncertainty in the lever arm,
+and the fact that angular acceleration is poorly known, make their
+uncertainty grow with metric distance as well as with the number of
+joints. The same consider-parameter treatment applies, with the lever
+arm as the parameter.
+
 ### Applied to the case at hand: an EKF with per-sensor varying covariance
 
 The filter in question is an extended Kalman filter in which each
@@ -1136,6 +1239,10 @@ a build with every fast-math option on.
   dynamics depend on another's? Are there bias or other vector states in
   addition?
 - What is the filter's rate and its share of the cycle time today?
+- What are the mechanical tolerances or calibration accuracies of hinge
+  axes and sensor mountings, and are misalignments calibrated today?
+  How fast do the links rotate? Those set the distance-dependent term.
+  Is link or joint compliance significant under load?
 - Is the existing estimator a single filter or a cascade? If a
   cascade, is that for cost, for rates, or because stages live in
   different places (for example inside drives)?
