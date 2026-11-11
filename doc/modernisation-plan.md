@@ -502,101 +502,126 @@ Two limits of the language as it stands:
   spike. The fallback is a `rtt3::arg("axis", "Axis index")` annotation on
   the function.
 
-#### Wrapping C functions as components
+#### Portable functions as components
 
-A large share of control code already exists as C functions: hand-written
-libraries, vendor drivers, and code generated from models. Writing a
-component around each one by hand is pure boilerplate (a port per
-argument, copy in, call, copy out). `rtt3` generates that component from
-the function's declaration.
+**Aim.** Algorithms and their data types are written once as plain C++,
+with no dependency on the framework, so the same function can run inside
+the simulator or as a node in the real-time system and can be moved from
+one to the other without being rewritten. The framework's job is to turn
+such a function into a component from its declaration alone.
+
+**What a portable function looks like.**
 
 ```cpp
-extern "C" {
-#include "pid.h"
-// int  pid_init(pid_state* s, const pid_gains* gains);
-// double pid_step(pid_state* s, double setpoint, double measured);
-}
+// control/pid.hpp: includes nothing from rtt3 except the annotation header
+struct PidParams { double kp = 1, ki = 0, kd = 0; double limit = 10; };
+struct PidState  { double integral = 0, previous_error = 0; };
 
-struct App {
-    [[=rtt3::periodic(1ms), =rtt3::priority(79)]]
-    rtt3::function_node<^^pid_step,
-                        rtt3::state<"s">,                    // kept inside the node
-                        rtt3::init<^^pid_init>> pid;         // called from configure
-
-    static constexpr auto links = rtt3::links(
-        rtt3::link(&App::planner, &Planner::target,   &App::pid,   rtt3::port<"setpoint">),
-        rtt3::link(&App::sensor,  &Sensor::position,  &App::pid,   rtt3::port<"measured">),
-        rtt3::link(&App::pid,     rtt3::port<"result">, &App::drive, &Drive::torque));
-};
+[[=blk::block]]
+Torque pid_step(PidState& state, const PidParams& params,
+                Position setpoint, Position measured,
+                std::chrono::nanoseconds dt) noexcept;
 ```
 
-The function is passed as a reflection, so its parameter names and types
-are available. From them the node gets, with no further code:
+Rules that keep it portable:
 
-| In the C declaration | Becomes |
+- **Plain types only** in the signature: value types that satisfy the port
+  data requirements (4.4). No ports, no framework error type, no handles.
+- **No hidden inputs.** Time comes in as a parameter, never from a clock;
+  configuration comes in as a parameter struct, never from a file; state
+  is passed in, never kept in statics. The function is then a pure
+  function of its arguments, which is what makes it give the same result
+  in the simulator, in the real-time system and in a unit test.
+- **No side effects** beyond its outputs and its state argument: no I/O,
+  no allocation, no logging through a framework.
+- Failure is reported through the return value (`std::expected` with the
+  library's own error enum, or a status member of the result).
+
+A stateful block may also be written as a class whose member function is
+the step (`struct Pid { PidParams params; Torque step(...); };`); the
+object is then the state.
+
+**Mapping to a node.** Because the declaration is C++, the roles of the
+parameters follow from their types and need no hints in the common case:
+
+| In the declaration | Becomes |
 |---|---|
-| Parameter passed by value, or `const T*` to one object | Input port named after the parameter, holding the latest value |
-| Non-void return value | Output port `result` (name can be overridden) |
-| `T*` to one object, non-const | Ambiguous in C, so it must be classified: `rtt3::out<"name">`, `rtt3::inout<"name">` or `rtt3::state<"name">` |
-| Pointer plus length pair | `rtt3::array<"ptr", "len">`, mapped to a bounded array port |
-| Parameter that is configuration, not signal | `rtt3::property<"name">`: a property instead of a port |
-| Integer status return | `rtt3::status<0>`: the given value means success, anything else puts the node in its error state; no `result` port is created |
-| Companion functions | `rtt3::init<^^f>` and `rtt3::cleanup<^^f>`, run from the node's configure and cleanup steps with the same state object |
+| Parameter by value or by `const&` | Input port named after the parameter, holding the latest value |
+| Return value | Output port; a returned struct can be unpacked into one port per member |
+| First non-const reference parameter | The node's state, kept inside the node and value-initialised at configuration |
+| `const&` parameter whose type is marked `blk::parameters`, or which is annotated so | Properties, loaded from the machine file |
+| `std::chrono` duration parameter annotated or named `dt` | Supplied by the node: its period, or the measured or simulated time since the last run |
+| Further non-const reference parameters | Output ports (annotate `blk::inout` to make one both) |
+| `std::expected<T, E>` return | `T` is the output; an error puts the node in its error state |
 
-An unclassified ambiguous parameter is a compile error that names the
-parameter and lists the choices. C headers cannot carry annotations, which
-is why the hints are given where the function is wrapped and not on its
-declaration.
-
-**Struct-in, struct-out functions.** Generated code often takes one
-struct of inputs and one of outputs. `rtt3::unpack<"u">` turns each member
-of that struct into its own port (by reflection on the struct), so the
-rest of the system connects to individual signals. The node assembles the
-struct from the latest value of each port before the call. This is the one
-place where several inputs are joined into one composite automatically,
-and the meaning is fixed: the latest values at the node's activation.
-
-**Functions that work on global variables.** Some generators emit a step
-function with no arguments and global input, output and parameter
-structs. These are wrapped by naming the globals:
+Anything that departs from these defaults is said with an annotation on
+the parameter or the function. Used in a deployment:
 
 ```cpp
-rtt3::function_node<^^model_step,
-                    rtt3::inputs<^^model_U>, rtt3::outputs<^^model_Y>,
-                    rtt3::properties<^^model_P>,
-                    rtt3::init<^^model_initialize>, rtt3::cleanup<^^model_terminate>> model;
+[[=rtt3::periodic(1ms), =rtt3::priority(79)]]
+rtt3::function_node<^^pid_step> pid;
+
+rtt3::link(&App::sensor, &Sensor::position, &App::pid, rtt3::port<"measured">)
 ```
 
-Such a node is a singleton. Declaring it twice in a deployment is a
-compile error, since both instances would share the same globals.
+The node is an ordinary node: it appears in the graph, is folded into a
+thread with its neighbours, can occupy a slot, and its links can be
+substituted. The call is direct and inlinable.
 
-**When it runs.** By default the node runs every activation of its thread
-on the latest input values. `rtt3::when_all_fresh` runs it only when every
-input has a new sample since the last run, and `rtt3::when_any_fresh` when
-at least one has.
+**Annotations without a framework dependency.** The annotation types
+(`blk::block`, `blk::parameters`, `blk::out`, units, documentation) live
+in one small header-only package with no dependencies, separate from the
+`rtt3` libraries, so a function library that uses them does not depend on
+the real-time framework. The simulator includes the same header or ignores
+the annotations entirely. See open question 19 on what the simulator can
+compile.
 
-**What the result is.** An ordinary node: it appears in the graph with its
-ports, can be folded into a thread with its neighbours, can sit in a slot,
-and its links can be substituted for simulation. The call is direct and
-inlinable, so the wrapper costs the copies of the arguments and nothing
-else. The same mechanism accepts C++ free functions and function objects.
+**Moving a function between the simulator and the real-time system.**
+
+- *Controller into the simulator*: the simulator calls `pid_step`
+  directly, with its own state, parameters and time step. Nothing from
+  `rtt3` is linked.
+- *Simulator model into the real-time system*: a plant or sensor model
+  written to the same rules is wrapped with `function_node` and placed in
+  a hardware slot as an alternative to the real driver (4.5). That gives
+  an in-process simulation with no network hop, alongside the UDP route.
+- *Either direction during development*: because a block is a pure
+  function, a recording of its inputs from a real machine (port
+  observation, 4.6) can be replayed through it offline and the outputs
+  compared, with no framework and no simulator running.
+
+**Shared types across the UDP link.** The same type definitions are used
+on both sides of a substituted link. The wire encoding and schema hash are
+generated from the type, and the encoder and decoder are available as a
+header-only package the simulator can use without the framework, so the
+two ends cannot disagree about a layout without it being detected.
+
+**C functions** are the same mechanism with less information. A C
+declaration cannot say whether a pointer is an input, an output or state,
+so those are classified where the function is wrapped
+(`rtt3::function_node<^^c_step, rtt3::state<"s">, rtt3::out<"y">>`), and
+an unclassified pointer is a compile error naming the parameter.
+Companion functions map to the lifecycle (`rtt3::init<^^f>`,
+`rtt3::cleanup<^^f>`), a pointer and length pair to a bounded array, and
+an integer status return to the node's error state. Generated code that
+works on global structs is wrapped by naming the globals and is a
+singleton.
+
+**When it runs.** By default every activation of its thread, on the
+latest input values. `rtt3::when_all_fresh` and `rtt3::when_any_fresh`
+restrict it to activations with new input.
 
 **Limits.**
 
-- Parameter names come from the declaration, so the header must name its
-  parameters; unnamed ones are addressed by position (`rtt3::port<0>`).
-- Argument and return types must be port data (4.4). Plain C structs
-  qualify without further work.
+- Parameter names come from the declaration; unnamed parameters are
+  addressed by position.
+- Purity is a convention the framework cannot prove. The test-time
+  allocation guard and system call filter (4.9) catch allocation and I/O;
+  hidden static state has to be found by review or by running two
+  instances in a test.
 - Variadic functions and functions taking callbacks are not wrapped.
-- The library cannot know whether a C function is safe for real-time use
-  or whether it is reentrant. A function with hidden static state must be
-  declared `rtt3::singleton` by the person wrapping it; allocation and
-  system calls inside it are caught by the allocation guard and system
-  call filter in tests (4.9), not at compile time.
-- A function that can block or is slow belongs in its own thread, like
-  any other driver.
-- Reflecting declarations from C headers is expected to work on GCC 16
-  but is one of the items for the phase 0 spike.
+- Reflecting free functions and their parameters, including annotations
+  on parameters, is on the phase 0 spike list for GCC 16.
 
 #### Data types: composition, inheritance and link adaptors
 
@@ -1574,8 +1599,14 @@ on questions 2 and 3; phase 6 on questions 1, 4 and 10.
     your own components, or mainly from the deployer, scripts and tools?
     Do you change properties while components are running? Do you use
     attributes or constants separately from properties?
-19. **C code to wrap**: what kind of C functions do you have in mind
-    (generated from models such as Simulink, vendor driver libraries,
-    hand-written algorithms)? Do they keep state in a struct passed by
-    pointer, in globals, or not at all? That decides which of the mapping
-    rules in 4.4 need to be in the first version.
+19. **Portable functions and the simulator**:
+    - What is the simulator written in and built with? If it cannot be
+      built with GCC 16, annotations in shared headers will not compile
+      there, and the hints have to be given where the function is wrapped
+      instead (as for C).
+    - Does the simulator call functions in-process at its own time step,
+      or only exchange data over UDP today?
+    - Do the functions you want to move currently depend on Orocos types
+      (ports, properties, `TaskContext`), or are they already plain
+      functions over plain structs?
+    - Is state usually a struct passed in, a class, or globals?
