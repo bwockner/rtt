@@ -1,6 +1,71 @@
 
-The Orocos Real-Time Toolkit
-============================
+The Orocos Real-Time Toolkit (fork)
+===================================
+
+About this fork
+---------------
+
+This repository is a fork of [orocos-toolchain/rtt](https://github.com/orocos-toolchain/rtt).
+It has two purposes:
+
+1. **Keep RTT 2.x usable** for existing systems on Linux (standard and
+   PREEMPT_RT kernels, x86-64 and ARM), with low-risk improvements to
+   determinism and throughput that need no change to component source code.
+2. **Develop `rtt3`**, a successor with a new C++ API, built alongside the
+   existing code in this repository.
+
+The CORBA transport and the Python and Lua bindings are not a focus of
+this fork.
+
+### Current state
+
+`master` contains upstream `master` with the `toolchain-2.9` and
+`toolchain-2.10` branches merged in. The code is still RTT 2.x and builds
+and installs as described under "Quick Installation" below. No `rtt3` code
+exists yet; the work so far is planning.
+
+### Direction for `rtt3`
+
+The decisions taken so far, in brief:
+
+- GCC 16 with C++26 reflection is required; there is no older language mode.
+- A new API in namespace `rtt3`, installable next to RTT 2.x. The classic
+  `TaskContext` API is not carried forward.
+- Components are plain structs. Ports, properties and operations are
+  described by their declarations, read through reflection, with no
+  registration code, name strings or macros.
+- Deployments are described in C++ and checked and wired at compile time,
+  with per-machine variation (sensor and actuator stacks, kinematic
+  variants, simulated hardware) selected from a configuration file at
+  start-up.
+- Algorithms are plain functions over plain data types that can be moved
+  between a simulator and the real-time system unchanged.
+- Real-time paths make no allocations, take no locks and make no system
+  calls beyond the periodic sleep; errors are reported with
+  `std::expected`.
+- Linux only, on x86-64 and ARM.
+
+These are proposals under discussion, and each plan lists the questions
+that are still open.
+
+### Plans
+
+| Document | Content |
+|---|---|
+| [doc/modernisation-plan.md](doc/modernisation-plan.md) | Design and phasing of `rtt3` |
+| [doc/rtt3-logging-plan.md](doc/rtt3-logging-plan.md) | Lock-free logger for `rtt3` |
+| [doc/optimisation-plan.md](doc/optimisation-plan.md) | Low-risk optimisations of the existing RTT 2.x code, with no API change |
+
+### Relationship to upstream
+
+Upstream history, tags and branches are kept. The licence is unchanged
+(GPL v2 with a linking exception, see [COPYING.md](COPYING.md)). Changes
+made here to the RTT 2.x code are intended to remain compatible with
+existing components at source level.
+
+
+RTT 2.x
+=======
 
 Quick Installation
 ------------------
