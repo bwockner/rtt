@@ -1196,10 +1196,12 @@ crude first step.
 
 **Limits of the rule.**
 
-- It treats link disturbances as white in time. Vibration is
-  oscillatory, so this holds when the estimator's bandwidth is well
-  below the vibration frequencies, and is optimistic otherwise. That is
-  the point at which modal states become necessary for a link.
+- It treats link disturbances as white in time and as reaching all
+  sensors at the same instant. Vibration is oscillatory and travels at a
+  finite speed, so both hold only for motion slow compared with the
+  vibration and with the time a wave takes to cross a link. The next
+  subsection gives the corrections that do not need a structural model;
+  beyond those, modal states become necessary for a link.
 - It assumes the disturbance of each link is independent of the others.
   A shock that excites the whole structure at once violates that
   briefly; the excitation scaling covers it by raising all the variances
@@ -1211,6 +1213,114 @@ crude first step.
 automatically, with the additional link's disturbance included in its
 uncertainty. No reconfiguration is needed, and the larger covariance of
 the affected joint is visible to whatever consumes the estimate.
+
+### Finite propagation speed: disturbances that arrive later further out
+
+**The effect.** A mechanical disturbance does not reach every sensor at
+once. It travels through the structure as an elastic wave, at the speed
+of sound in the material for compression waves (several kilometres per
+second in steel or aluminium) and considerably slower for the bending
+waves that carry most out-of-plane vibration, whose speed also depends
+on frequency. A sensor one link further out sees the same disturbance
+later by the link's length divided by the wave speed. These figures are
+general physical orders of magnitude, not properties of the machine in
+question.
+
+Whether it matters is a comparison of that delay with the sample period
+and with the period of the vibration. For short, stiff links the delay
+is a small fraction of a millisecond and can be ignored. For links of a
+metre or more carrying low-frequency bending waves it can be several
+milliseconds, which is several samples at a kilohertz. It is also the
+same physics as link flexibility seen from the other side: a structure
+behaves as a rigid body only for motion slow compared with the time a
+wave takes to cross it.
+
+**What it breaks in the default rule.** The accumulated-disturbance
+model assumed that the units on links i and i-1 see the upstream
+disturbance at the same instant, so that it cancels in their difference.
+With a delay τ between them it cancels only for components slow compared
+with τ. For a component at angular frequency ω the uncancelled fraction
+is about ω τ. So:
+
+- low-frequency shared disturbance still cancels between neighbours;
+- high-frequency shared disturbance does not, and appears in the
+  difference as if it were hinge motion;
+- the cross-covariance between two sensors is not at zero lag. It peaks
+  at the propagation delay between them.
+
+**Three remedies, short of a structural model.**
+
+*1. Compare sensors at matched times.* The unit on link i at time t is
+compared with the unit on link i-1 at time t minus τ_i, where τ_i is
+that link's propagation delay. Cancellation is restored for the band in
+which a single delay is a good description.
+
+- It needs a short history of each unit's readings in a fixed-size
+  buffer, and interpolation when the delay is not a whole number of
+  samples. Both are allocation-free and bounded.
+- The hinge's own rate changes a little over τ_i; that error is the
+  angular acceleration times the delay and joins the timing term already
+  described.
+- The delay per link is one more parameter. It does not have to come
+  from material data: the lag at which the cross-correlation between two
+  neighbouring units peaks, in recorded data, is the delay.
+- Bending waves are dispersive, so one delay fits one frequency band. It
+  is chosen for the band that carries most of the vibration energy; what
+  remains is treated as below.
+
+*2. Reduce the assumed correlation between sensors to what is actually
+coherent.* The cross-covariance between two units in the default model
+is multiplied by a coherence factor between zero and one. A factor of
+one is the instantaneous model; zero treats the units' disturbances as
+unrelated. The factor is measured from the same recordings, as the
+height of the cross-correlation peak, and falls with the number of links
+between the two units. This costs nothing at run time and stops the
+filter relying on a cancellation that is only partly there. It can be
+combined with matched times, in which case the coherence is that of the
+delay-aligned signals and is higher.
+
+*3. Do not count correlated samples as independent.* Propagation,
+reflection at joints and ends, and ring-down make each link's
+disturbance correlated from one sample to the next. A filter that treats
+it as white averages it away too fast and becomes overconfident. Without
+shaping-filter states, the practical measures are:
+
+- inflate the disturbance variance by the factor that corresponds to its
+  correlation time, so that many correlated samples carry the weight of
+  the few independent ones they amount to;
+- or apply the inertial update only about once per correlation time,
+  using the average over that interval, which also reduces computation.
+
+The correlation time is read from the autocorrelation of each unit's
+signal in the recordings.
+
+**What this asks of the data path.**
+
+- Time stamps on inertial samples have to be accurate to a fraction of
+  the propagation delay, otherwise alignment makes things worse. Where
+  the delay is well under a sample period, hardware time stamps or a
+  common sampling trigger are needed for remedy 1 to be worth doing;
+  remedies 2 and 3 do not depend on it.
+- The per-unit history buffers are part of the estimator block's state,
+  fixed in size from the largest delay and the sample rate.
+
+**A further limit of the accumulation model that this exposes.** The
+model has each link's disturbance appearing only on the sensors beyond
+it. That is right for slow effects: compliance at a joint rotates
+everything outboard and nothing inboard. Waves travel both ways. An
+impact at the tip reaches the outermost unit first and moves inward, the
+reverse of the assumed order. The coherence factor absorbs this in a
+statistical sense, since it only records how related two units are; the
+sign of the measured lag between neighbours shows which way disturbances
+actually travel, and is a useful diagnostic of where they originate.
+
+**Order of work.** Measure first: from recordings, compute the
+cross-correlation between neighbouring units and the autocorrelation of
+each. If the lags are well under a sample and the autocorrelation decays
+within a sample or two, none of this is needed and the default rule
+stands as written. Otherwise apply remedy 3 always, remedy 2 next, and
+remedy 1 only where the measured lag is a significant fraction of the
+vibration period and time stamps are good enough.
 
 ### Applied to the case at hand: an EKF with per-sensor varying covariance
 
@@ -1437,6 +1547,12 @@ a build with every fast-math option on.
   dynamics depend on another's? Are there bias or other vector states in
   addition?
 - What is the filter's rate and its share of the cycle time today?
+- Disturbances are time-correlated through their finite propagation
+  speed (stated by the owner). What are the link lengths and material,
+  the inertial sample rate, and how accurately are samples from
+  different units time-stamped relative to each other? Do recordings
+  with all units logged together exist, so that lags and coherence can
+  be measured?
 - There is one inertial unit per link, and the default rule is that
   trust falls with distance along the chain, without modelling mode
   shapes (decided). What are the link lengths and the lowest

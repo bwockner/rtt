@@ -117,6 +117,10 @@ first.
   the estimator's bandwidth, how the varying covariance is computed
   today, and whether recordings exist to fit the per-link constant. See
   `rtt3/numerics.md`.
+- **Propagation delay between inertial units**: link lengths and
+  material, inertial sample rate, relative time-stamp accuracy between
+  units, and whether synchronised recordings exist to measure lags and
+  coherence. See `rtt3/numerics.md`.
 - **Imperfect geometry**: tolerances or calibration accuracy of hinge
   axes and sensor mountings, rotation rates, and whether compliance is
   significant. These set how much less a distant sensor is trusted. See
