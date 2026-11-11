@@ -26,6 +26,7 @@ remain in the tree.
 |---|---|
 | `doc/modernisation-plan.md` | The `rtt3` design, decisions taken, phasing |
 | `doc/rtt3-logging-plan.md` | The lock-free logger for `rtt3` |
+| `doc/numerics.md` | SIMD, alignment, floating-point settings, comparing results with the simulator |
 | `doc/optimisation-plan.md` | Findings in the RTT 2.x code and the order to fix them |
 | `doc/open-questions.md` | Everything not yet decided, the licence position, and what was assumed without verification |
 

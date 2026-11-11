@@ -54,6 +54,7 @@ that are still open.
 |---|---|
 | [doc/modernisation-plan.md](doc/modernisation-plan.md) | Design and phasing of `rtt3` |
 | [doc/rtt3-logging-plan.md](doc/rtt3-logging-plan.md) | Lock-free logger for `rtt3` |
+| [doc/numerics.md](doc/numerics.md) | SIMD, floating-point settings and agreement between simulator and target |
 | [doc/optimisation-plan.md](doc/optimisation-plan.md) | Low-risk optimisations of the existing RTT 2.x code, with no API change |
 | [doc/open-questions.md](doc/open-questions.md) | Undecided points, the licence position, and unverified assumptions |
 | [AGENTS.md](AGENTS.md) | Layout, build and test instructions, and working rules for contributors and automated agents |
