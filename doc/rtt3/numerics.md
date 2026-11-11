@@ -1,12 +1,12 @@
 # Numerics: SIMD, floating point and agreement with the simulator
 
 Status: design notes for `rtt3`, with a short section on what applies to
-RTT 2.x today. This was split out of `modernisation-plan.md` (section
-4.9), which keeps a summary.
+RTT 2.x today. `realtime-internals.md` keeps a summary. Part of the
+`rtt3` plan; see [README.md](README.md) for the index.
 
 Decided so far: performance comes first, and the simulator and the real
 deployment are expected to agree within a tolerance, not bit for bit.
-Open points are in `open-questions.md` and at the end of this document.
+Open points are in `../open-questions.md` and at the end of this document.
 
 SIMD matters to the framework in four places: how data is laid out and
 copied, how threads are set up, how blocks are compiled, and how results
@@ -33,7 +33,7 @@ For per-axis data the recommended form is a
 struct of fixed-size arrays (`std::array<double, N>` for positions, one
 for velocities, and so on), not an array of per-axis structs. The
 compiler can vectorise loops over it, and it is still plain port data.
-Reflection treats both forms alike. Repeated ports (`modernisation-plan.md`, section 4.4) are for wiring
+Reflection treats both forms alike. Repeated ports (`components-and-ports.md`) are for wiring
 convenience; a block that processes all axes at once should take one
 array-valued port.
 
@@ -65,13 +65,13 @@ floating-point control state at start, from the deployment:
 
 ## Instruction sets and builds
 
-- The target CPU is set in the toolchain file per machine class (`modernisation-plan.md`, section 4.3),
+- The target CPU is set in the toolchain file per machine class (`os-layer.md`),
   so the compiler can use the vector instructions the deployment hardware
   has. One binary per machine class, not run-time dispatch, is the
   default; it keeps code paths identical between test and production.
 - Where one binary must serve several CPUs, function multi-versioning is
   permitted for individual blocks. Its resolvers run at load time, which
-  immediate binding (`modernisation-plan.md`, section 4.9) already
+  immediate binding (`realtime-internals.md`) already
   moves to start-up.
 - 512-bit vectors on x86-64 are off unless enabled deliberately: on some
   processors they lower the clock frequency of the core for a while and
@@ -178,7 +178,7 @@ fixed by construction.
 
 - Dynamic-size types (`MatrixXd`, `VectorXd`) allocate. On ports they are
   `dynamic_data` and need the explicit opt-in and data sample
-  (`modernisation-plan.md`, section 4.4).
+  (`components-and-ports.md`).
 - Where the size is only known at configuration but has a bound, use
   Eigen's bounded form (dynamic size with fixed maximum rows and columns).
   It stores inline and qualifies as bounded data.

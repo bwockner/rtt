@@ -6,11 +6,11 @@ checked. The plans themselves remain the reference for the design; when a
 question here is answered, update the plan it belongs to as well.
 
 Numbers in brackets refer to the open-question lists in the plans: M for
-`modernisation-plan.md`, L for `rtt3-logging-plan.md`.
+`rtt3/questions.md`, L for `rtt3/logging.md`.
 
 ## 1. Questions that block design work
 
-These decide the shape of `rtt3` phases 3 to 6 and should be answered
+These decide the shape of `rtt3` stages S4 and S6 to S11 and should be answered
 first.
 
 **The existing simulator and deployer extension**
@@ -88,7 +88,7 @@ first.
   unaligned Eigen types at boundaries acceptable? Is any
   Eigen code built with OpenMP or an external BLAS? Is there any
   cross-checking between two computers, or checksum over computed values,
-  that would need identical results? See `numerics.md`. [M20]
+  that would need identical results? See `rtt3/numerics.md`. [M20]
 - **Component style**: can algorithmic components be written as functions
   of inputs returning outputs, so same-thread links are register-passed,
   and which components need port members? Should inlining be bounded for
@@ -211,7 +211,7 @@ a build dependency, not part of the tree.
 
 | Assumption | Where it matters | How to settle it |
 |---|---|---|
-| GCC 16 implements the reflection features the design relies on (annotations, parameter reflection, static-storage helpers, expansion statements) | The whole `rtt3` design | Phase 0 spike on a real GCC 16 |
+| GCC 16 implements the reflection features the design relies on (annotations, parameter reflection, static-storage helpers, expansion statements) | The whole `rtt3` design | Stage S1 spike on a real GCC 16 |
 | Error handling of reflection queries and constexpr exceptions in GCC 16 | Quality of compile-time diagnostics | Same spike |
 | Annotations can be placed on function parameters | Per-argument documentation of operations and blocks | Same spike; fallback is an annotation on the function |
 | A per-call-site constant can be created without a macro | Natural logging call syntax | Logging step L1; fallback is a string template parameter |

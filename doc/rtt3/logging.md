@@ -1,7 +1,9 @@
-# rtt3 logging: plan for a lock-free logger
+# rtt3: lock-free logger
+
+Part of the `rtt3` plan; see [README.md](README.md) for the index.
 
 Status: proposal. This expands the "Logging from real-time threads" part
-of `modernisation-plan.md` (section 4.9) into its own work plan. It assumes
+of `realtime-internals.md` into its own work plan. It assumes
 the decisions recorded there: GCC 16, C++26 with reflection, Linux on
 x86-64 and AArch64, no macros in user-facing API, no exceptions from
 `rtt3`, no allocation or system calls on real-time paths.
@@ -138,7 +140,7 @@ A `rtt3::log::loggable` concept decides what may be passed:
 | String literals | The pointer; the text stays in read-only storage |
 | `std::string_view`, C strings, bounded strings | Length prefix and bytes, truncated at a per-call-site maximum (default 128), with truncation marked in the output |
 | `std::chrono` durations and time points | Raw count |
-| `rtt3::trivial_data` types (port data, section 4.4 of the main plan) | Raw bytes of the object |
+| `rtt3::trivial_data` types (port data, see `components-and-ports.md`) | Raw bytes of the object |
 | `rtt3::bounded_data` types | Member-wise by reflection, bounded |
 | Anything else, including `std::string` and allocating containers | Rejected at compile time, with a message suggesting a view or a bounded copy |
 
@@ -315,10 +317,12 @@ allocation or system call in either.
 | L5 | Flight-recorder mode; fatal-signal dump; shared mapping; `--decode-log` | Crash test passes |
 | L6 | Inspection service integration: live tail, level control, counters | Levels changed and logs followed from a separate process |
 
-L0 to L2 belong to phase 1 of the main plan, since every later phase uses
-the logger. L3 needs nodes and threads (phase 3) and the machine file
-(phase 4). L6 needs the runtime layer (phase 6). L4 and L5 can be done at
-any point after L2.
+In terms of the stages in [README.md](README.md): L0 to L2 are stage S5
+and can start as soon as the toolchain exists, since every later stage
+uses the logger; the L1 spike shares the compiler work of stage S1. L3
+needs nodes and threads (S6) and the machine file (S8). L6 needs the
+runtime layer (S11). L4 and L5 can be done at any point after L2. L3 to
+L6 together are stage S12.
 
 ## 6. Risks
 

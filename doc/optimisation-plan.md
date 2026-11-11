@@ -1,6 +1,6 @@
 # RTT 2.x: low-risk optimisations with no API change
 
-Status: proposal. This is separate from `modernisation-plan.md` and makes
+Status: proposal. This is separate from the `rtt3` plan in `rtt3/` and makes
 no assumption that the `rtt3` work happens. Everything here applies to the
 existing code base, as used on Linux (standard and PREEMPT_RT kernels) on
 x86-64 and ARM.
@@ -395,7 +395,7 @@ Logging from real-time components, in particular:
   asynchronous queue is guarded by a `std::mutex` without priority
   inheritance and that the message text is formatted in the caller, so
   this is suitable for soft real-time use, not a lock-free path. See
-  `rtt3-logging-plan.md` for the comparison.
+  `rtt3/logging.md` for the comparison.
 
 ### 3.6 Existing branches in this repository that cover some items
 
