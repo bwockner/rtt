@@ -7,7 +7,7 @@ transport and the Python and Lua bindings are not carried forward.
 
 | Topic | Decision |
 |---|---|
-| Language | C++23 is required. There is no C++17 or C++20 mode. C++26 reflection is an optional header-only tier, GCC 16 only for now. |
+| Language and compiler | GCC 16 is the supported compiler and the floor. C++23 is the required language level. C++26 reflection (`-std=c++26 -freflection`) is on in the default build and is the normal way to describe a component; a hand-written description remains as a fallback because the feature is still experimental. |
 | API | A new, clean API. The classic RTT API (`TaskContext`, `InputPort<T>`, `OperationCaller`, ...) is not provided, not even as a wrapper. Existing components are ported by hand with a migration guide. |
 | Namespace and install | Everything lives in namespace `rtt3` with its own header directory, library names and CMake package, so it installs next to RTT 2.x and can be loaded into the same process. |
 | Introspection | The typed core carries no names and no runtime type registry. Names, by-name lookup, property files and runtime loading are an opt-in library on top. |
@@ -116,16 +116,31 @@ a small hand-written bridge component where data has to cross.
 
 - CMake 3.28 or later, target-based, exported targets, `CMakePresets.json`
   including an `aarch64-linux-gnu` cross preset.
-- `CMAKE_CXX_STANDARD 23`, extensions off.
-- Proposed compiler floor: GCC 14 and Clang 18 with libstdc++ 14. This is
-  what deducing `this`, `std::expected` with monadic operations,
-  `std::move_only_function`, `std::print` and `std::generator` need
-  together. Features that arrive later (`std::flat_map` in GCC 15,
-  `std::inplace_vector` in C++26) are not used in installed headers until
-  the floor moves. See open question 6 on the ARM toolchain.
-- CI on GitHub Actions, Linux only: GCC 14 and Clang 18 as the floor, a
-  current GCC and Clang, and GCC 16 with `-std=c++26 -freflection` (4.7);
-  x86-64 and AArch64; ASan, UBSan and TSan jobs.
+- Compiler: GCC 16 with libstdc++ 16, on both x86-64 and AArch64. No older
+  GCC is supported. GCC 16 defaults to `-std=gnu++20`, so the build always
+  sets the standard explicitly.
+- Two build modes, both tested: the default, `-std=c++26 -freflection`, and
+  a fallback, `-std=c++23`, in which the reflection headers are not
+  included. The built libraries are identical in both.
+- With GCC 16 as the floor, the whole C++23 library can be used in
+  installed headers without version checks (`std::expected`,
+  `std::move_only_function`, `std::print`, `std::generator`,
+  `std::flat_map`, deducing `this`). C++26 library additions reported for
+  libstdc++ 16, such as `std::inplace_vector`, are candidates for the
+  fixed-capacity containers the core needs; each is confirmed on the real
+  toolchain before use and only used in the C++26 build mode.
+- **ARM toolchain.** Distribution and vendor cross compilers will lag
+  behind GCC 16, so the project provides its own: a container image with an
+  `aarch64-linux-gnu` GCC 16 cross compiler and a sysroot taken from the
+  target. Deployments link libstdc++ statically, so the board needs no new
+  runtime library; only the sysroot's glibc version has to match the target.
+- **Clang** is not a supported compiler. It cannot build the reflection
+  tier, and no CI job depends on it. Clang-based tools (clangd,
+  clang-tidy) will not parse headers that use reflection or annotations;
+  the `-std=c++23` fallback mode exists partly so that such tools can still
+  be run on the core.
+- CI on GitHub Actions, Linux only: GCC 16 in both build modes, on x86-64
+  and AArch64, with ASan, UBSan and TSan jobs.
 - New test suite in a current framework (open question 9). The existing
   Boost.Test files are not ported, since they exercise an API that no
   longer exists; they are read as a specification when writing new tests.
@@ -283,8 +298,8 @@ struct Controller {
   };
   ```
 
-  This is the only boilerplate a C++23 component has, and the C++26 tier
-  (4.7) generates it. Names exist only in this table. A system that never
+  Reflection (4.7) generates this by default; it is written by hand only
+  to override what reflection produces or in the `-std=c++23` fallback mode. Names exist only in this table. A system that never
   asks for a name does not link them; where an identifier is needed at run
   time it is a compile-time hash of the name.
 - Operations are member functions listed in the description and called
@@ -354,10 +369,13 @@ A new design, not a port of the classic interfaces. Scope:
 - An introspection interface sufficient for a task browser or reporter to
   be written against it. Those tools themselves are outside this plan.
 
-### 4.7 C++26 reflection tier (GCC 16)
+### 4.7 C++26 reflection (GCC 16)
 
-An optional tier that generates the `describe<T>` tables from the
-declarations themselves.
+With GCC 16 as the only supported compiler, reflection is available in
+every supported build and is the default way a component is described:
+the `describe<T>` tables are generated from the declarations themselves.
+The hand-written form of 4.4 stays as an explicit override and as the
+fallback if the experimental feature changes or has to be switched off.
 
 **What GCC 16 provides.** Reflection is experimental and off by default; it
 needs `-std=c++26 -freflection` and the `<meta>` header. Status below is
@@ -382,8 +400,8 @@ P2996 support yet.
 
 **Rules.**
 
-- Enabled only when `__cpp_impl_reflection` and `__cpp_lib_reflection` are
-  defined. Header-only, under `rtt3/meta/`; the built libraries never
+- On by default; compiled out when `__cpp_impl_reflection` and
+  `__cpp_lib_reflection` are not defined (the `-std=c++23` mode). Header-only, under `rtt3/meta/`; the built libraries never
   depend on it.
 - Reflection fills the primary template of `rtt3::describe<T>`. An explicit
   specialisation always wins. It adds no runtime data structure of its own,
@@ -430,9 +448,11 @@ there is a concrete need. Contracts, also experimental in GCC 16, are a
 separate topic.
 
 **Risk.** The feature is behind an experimental flag in one compiler and
-may change in later GCC releases. Because it only produces tables that can
-also be written by hand, withdrawing or reworking the tier costs
-convenience, not function. Only public members are reflected by default.
+may change in GCC 16 point releases and in GCC 17, and the project now
+relies on it by default. Two things contain that: it only produces tables
+that can also be written by hand, and the `-std=c++23` mode is built and
+tested in CI, so a regression in the compiler costs convenience, not
+function. The exact GCC 16 point release is pinned in the toolchain image. Only public members are reflected by default.
 
 ### 4.8 Macro policy
 
@@ -488,14 +508,14 @@ Each phase ends with tests green on x86-64 and AArch64.
 
 | Phase | Content | Exit criterion |
 |---|---|---|
-| 0. Baseline | Fork, new CMake and CI beside the old tree, benchmark harness, RTT 2.x numbers recorded on desktop and ARM board | Reproducible baseline; empty `rtt3` libraries build and install next to RTT 2.x |
+| 0. Baseline | Fork, GCC 16 toolchain image (native and AArch64 cross), new CMake and CI beside the old tree, benchmark harness, RTT 2.x numbers recorded on desktop and ARM board | Reproducible baseline; empty `rtt3` libraries build and install next to RTT 2.x |
 | 1. OS layer | `rtt3::os`, memory locking, graceful downgrade, logger front end, simulated clock | Thread, timing and lock tests pass; wake-up latency measured on the ARM board |
 | 2. Lock-free primitives | Data object, buffers, queues, pool | Stress and model-checking tests pass on both architectures |
 | 3. Components and ports | `component` concept, ports, channels, policies, `connect`, activities, lifecycle, error type | Hand-wired example runs; port latency no worse than baseline |
 | 4. Static deployment | `rtt3::deployment`, validation, scheduling fold, channel selection, `run` | Example system runs with zero allocations after start-up and no string handling |
-| 5. Operations and properties | `describe<T>`, typed callers, engine messages | Operation call cost no worse than baseline |
+| 5. Operations, properties, description | `describe<T>` written by hand first, then generated by reflection (4.7); typed callers, engine messages | Operation call cost no worse than baseline; reflected and hand-written descriptions identical in CI |
 | 6. Runtime layer | `rtt3-reflect`: names, type-erased connect, type descriptions, property files, registrar and loader, `expose` | A static deployment can be inspected and extended at run time; an RTT 2.x and an rtt3 component load into one process |
-| 7. C++26 reflection | `rtt3/meta/` on GCC 16 | Reflected and hand-written descriptions identical in CI |
+| 7. Reflection extras | Reflected type descriptions for data types, deployment as a struct, member-naming diagnostics | Example system written with no hand-written descriptions at all |
 | 8. Release | Delete the old `rtt/` tree, migration guide with a worked port of a real component, API and ABI policy | Tagged 3.0 |
 
 Phases 1 and 2 do not depend on any open question. Phases 3 to 5 depend
@@ -515,8 +535,11 @@ on questions 2 and 3; phase 6 on questions 1, 4 and 10.
 - **Compile time and error quality** of deployment templates on large
   systems. Mitigation: benchmark from phase 0; keep checks in constexpr
   functions over index arrays instead of deep recursive templates.
-- **Compiler floor on the target.** GCC 14 is recent for board vendor
-  toolchains (open question 6).
+- **Single, very recent compiler.** GCC 16 only, with an experimental
+  feature on by default. Mitigation: pinned toolchain image, the tested
+  `-std=c++23` fallback mode, static linking of libstdc++ on the target.
+- **Tooling.** clangd and clang-tidy cannot parse reflection code; IDE
+  support for component headers will be limited until Clang catches up.
 - **Ecosystem.** OCL (deployer, taskbrowser, reporting), typegen/orogen and
   rtt_ros integration do not work with `rtt3` and are outside this plan.
 - **Licence.** The tree is GPL v2 with a linking exception. Code written
@@ -538,9 +561,8 @@ on questions 2 and 3; phase 6 on questions 1, 4 and 10.
    single-process with bridges written as ordinary components?
 5. **ARM variants**: AArch64 only, or 32-bit ARMv7 as well? Which board and
    kernel should be the reference for latency numbers?
-6. **Compiler floor**: is GCC 14 / Clang 18 acceptable? Which compiler does
-   your ARM cross toolchain or board SDK provide? GCC 13 would work if
-   deducing `this` and `std::print` are avoided in installed headers.
+6. **Compiler**: decided, GCC 16. Remaining point: is a project-built
+   AArch64 cross toolchain acceptable, or must the build use a vendor SDK?
 7. **Links in static deployments**: fixed for the life of the process, or
    changeable at run time (disconnect, reconnect, change policy)? Fixed
    links allow the channel selection and inlining in 4.5.
@@ -552,10 +574,15 @@ on questions 2 and 3; phase 6 on questions 1, 4 and 10.
 11. **Runtime tooling**: how much by-name runtime access do you actually
     use (task browser, reporter, deployer XML)? This sets how large
     `rtt3-reflect` needs to be, and whether phase 6 can shrink.
-12. **Reflection tier ambition**: should C++26 reflection stay a pure
-    convenience over hand-written descriptions (as planned), or may some
-    features exist only there?
+12. **Fallback mode**: keep the hand-written `describe<T>` path and the
+    `-std=c++23` build mode as insurance (as planned), or require
+    reflection outright? Requiring it removes a build mode and some code,
+    but ties every component to an experimental compiler flag.
 13. **Exceptions from user hooks**: is `noexcept` hooks with termination
     the right default, with `catch_exceptions` as opt-in, or the reverse?
 14. **Project name and licence**: is the package published as `rtt3`, does
     it keep the Orocos name, and is the existing licence kept?
+15. **Portability beyond Linux**: adopt the low-cost guardrails that keep
+    an RTOS or microcontroller port possible (core builds with
+    `-fno-exceptions -fno-rtti`, no POSIX headers in the core, lock-free
+    primitives parameterised on word size), or leave them out?
