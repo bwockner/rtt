@@ -713,6 +713,102 @@ precision removes the conditioning concerns at negligible cost. The
 mixed-precision factored form remains relevant only if a large state
 survives the reduction.
 
+### Worked case: a gyroscope on a hinged link sees out-of-plane rotation
+
+**The situation.** Link i is attached to its parent by a hinge, so
+relative to the parent it can only rotate about the hinge axis. A
+gyroscope on link i reports angular velocity with a component that is
+not along that axis. The hinge cannot have produced it. In the reduced
+model this is not a contradiction to be discarded; it is information
+about the joints further up the chain.
+
+**The measurement model.** The angular velocity of link i, expressed in
+its own frame, is the sum of the contributions of every joint between it
+and the base:
+
+    ω_i = Σ_j (a_j seen in frame i) · q̇_j        over the ancestors j of i
+
+where `a_j` is the axis of joint j and `q̇_j` its rate. This is exactly
+the rotational part of the block `B_i` from the previous subsection, so
+the gyroscope's measurement Jacobian is not derived separately: it is
+the rotational rows of `B_i`, plus identity columns for the gyroscope's
+bias states. The joint rates are part of the reduced state for this to
+apply.
+
+**What the update does.** The hinge's own column of that Jacobian is the
+hinge axis. The out-of-plane components of the measurement have zero
+entries in that column, so they cannot move the hinge's rate at all.
+They have non-zero entries in the columns of ancestor joints whose axes,
+seen from link i, have components in those directions. The Kalman update
+therefore distributes the out-of-plane innovation among exactly those
+joints, in proportion to how uncertain each one's rate currently is and
+how strongly its axis projects onto the measured direction. That is the
+"evidence of a true movement of another joint", obtained with no special
+case in the code: it is what `H B` and the gain compute.
+
+Two consequences follow without further work:
+
+- The update creates correlation between the rates of the joints that
+  could have caused the motion. A later measurement that pins one of
+  them down (an encoder on that joint, a gyroscope on a link nearer the
+  base) automatically sharpens the others.
+- Gyroscopes on consecutive links, taken together, isolate each joint:
+  the difference of their angular velocities, in a common frame, is the
+  hinge axis times that hinge's rate. The filter does this implicitly,
+  with the correct weighting, and it is the reason a gyroscope on every
+  link makes every joint rate observable.
+
+**When no joint can explain it.** If no ancestor axis has a component in
+the measured out-of-plane direction, the corresponding rows of `H B` are
+zero apart from the bias columns. The model then has no motion to
+attribute the measurement to. That happens when the hinge axes are all
+parallel, which is exactly the planar mechanism. The component is one of:
+
+- motion of the base, if the base is not actually fixed;
+- compliance or clearance in a joint or link;
+- misalignment of the gyroscope's axes relative to the link;
+- gyroscope bias, which is the only thing the filter can then adjust,
+  and which it will adjust wrongly if the cause is one of the others;
+- a fault.
+
+The filter must not be left to absorb such a component into the bias
+silently. Two measures:
+
+- *Parity residual.* For each sensor, the part of the innovation that
+  lies outside the range of that sensor's `H B` is separated out. The
+  projector that does this comes from the same symbolic model. That
+  residual is not used to update the mechanism's state; it is a
+  monitored output with its own threshold. A persistent non-zero value
+  says the model is missing a freedom, which is a precise and early
+  diagnostic.
+- *Add the freedom deliberately.* If the out-of-plane motion is real and
+  matters, it becomes a coordinate: a base tilt, a compliance angle at a
+  joint, or a mounting misalignment to be calibrated. This is the "extra
+  coordinates" case above, and the parity residual is the evidence for
+  which one to add.
+
+**A run-time check of the planar approximation.** With the planar
+variant of the model, every out-of-plane gyroscope component is parity
+residual by construction. Its magnitude is therefore a direct, continuous
+measurement of how well "approximately planar" holds on the machine as it
+runs, complementing the off-line comparison of the planar and full
+variants (`blocks.md`, "Generated kinematics"). A threshold on it can
+raise a warning or select the full model.
+
+**How it is computed.** A gyroscope's three axes usually have independent
+noise, so the update is three scalar updates. Each uses one row of the
+rotational part of `B_i`, which has as many non-zero entries as link i
+has ancestors, plus one bias entry. The per-sensor, varying-covariance
+scheme below applies unchanged.
+
+**In the full SE(3)^n formulation, by contrast,** the same measurement
+would update link i's own orientation, and the hinge constraints would
+have to pull the other links along through additional constraint
+measurements. The information reaches the same joints in the end, but
+through more arithmetic, with a constraint weighting to tune, and with
+no clean statement of which part of the measurement the mechanism cannot
+explain.
+
 ### Applied to the case at hand: an EKF with per-sensor varying covariance
 
 The filter in question is an extended Kalman filter in which each
@@ -938,6 +1034,10 @@ a build with every fast-math option on.
   dynamics depend on another's? Are there bias or other vector states in
   addition?
 - What is the filter's rate and its share of the cycle time today?
+- Where are gyroscopes and encoders mounted along the chain, and is the
+  base fixed? What should happen when a sensor reports motion the
+  mechanism cannot produce: warn, add a modelled freedom, or switch from
+  the planar to the full model?
 - How far from the machine origin do the estimated parts move, and
   which error convention (body or fixed frame) is used today? Do the
   models allow an invariant formulation?

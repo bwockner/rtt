@@ -107,6 +107,10 @@ first.
   used, and the state magnitudes, required
   resolutions and run length that decide whether a mixed-precision
   factored form is safe. See `rtt3/numerics.md`.
+- **Unexplained sensor motion**: when a gyroscope reports rotation the
+  mechanism model cannot produce, should the system warn, model an extra
+  freedom, or switch from the planar to the full model? Where are the
+  sensors mounted and is the base fixed? See `rtt3/numerics.md`.
 - **Generated kinematics**: SymForce is planned for closed-form
   kinematics. Which version, is generated code checked in or regenerated,
   which calculations stay on KDL, and what tolerance defines
