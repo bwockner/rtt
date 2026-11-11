@@ -1,4 +1,4 @@
-# rtt3: plan for a C++23 successor to Orocos RTT
+# rtt3: plan for a C++26 successor to Orocos RTT
 
 Status: proposal for a new fork. Scope is the C++ API only. The CORBA
 transport and the Python and Lua bindings are not carried forward.
@@ -7,7 +7,7 @@ transport and the Python and Lua bindings are not carried forward.
 
 | Topic | Decision |
 |---|---|
-| Language and compiler | GCC 16 is the supported compiler and the floor. C++23 is the required language level. C++26 reflection (`-std=c++26 -freflection`) is on in the default build and is the normal way to describe a component; a hand-written description remains as a fallback because the feature is still experimental. |
+| Language and compiler | GCC 16 with `-std=c++26 -freflection` is the one supported configuration. Reflection is required: it is how components, data types and deployments are described. There is no C++23 mode and no hand-written description path. |
 | API | A new, clean API. The classic RTT API (`TaskContext`, `InputPort<T>`, `OperationCaller`, ...) is not provided, not even as a wrapper. Existing components are ported by hand with a migration guide. |
 | Namespace and install | Everything lives in namespace `rtt3` with its own header directory, library names and CMake package, so it installs next to RTT 2.x and can be loaded into the same process. |
 | Introspection | The typed core carries no names and no runtime type registry. Names, by-name lookup, property files and runtime loading are an opt-in library on top. |
@@ -119,28 +119,27 @@ a small hand-written bridge component where data has to cross.
 - Compiler: GCC 16 with libstdc++ 16, on both x86-64 and AArch64. No older
   GCC is supported. GCC 16 defaults to `-std=gnu++20`, so the build always
   sets the standard explicitly.
-- Two build modes, both tested: the default, `-std=c++26 -freflection`, and
-  a fallback, `-std=c++23`, in which the reflection headers are not
-  included. The built libraries are identical in both.
-- With GCC 16 as the floor, the whole C++23 library can be used in
-  installed headers without version checks (`std::expected`,
-  `std::move_only_function`, `std::print`, `std::generator`,
-  `std::flat_map`, deducing `this`). C++26 library additions reported for
-  libstdc++ 16, such as `std::inplace_vector`, are candidates for the
-  fixed-capacity containers the core needs; each is confirmed on the real
-  toolchain before use and only used in the C++26 build mode.
+- One build mode: `-std=c++26 -freflection`, extensions off. The flags are
+  exported as usage requirements of the `rtt3::core` CMake target, so
+  component projects get them by linking it.
+- The C++23 library and the C++26 additions in libstdc++ 16 can be used
+  throughout, including in the libraries themselves: `std::expected`,
+  `std::move_only_function`, `std::print`, `std::flat_map`, deducing
+  `this`, pack indexing, expansion statements, and (once confirmed on the
+  real toolchain) `std::inplace_vector` for fixed-capacity storage.
+- The exact GCC 16 point release is pinned in the toolchain image, and
+  moving to a newer one is a reviewed change gated by the reflection
+  conformance tests (4.7).
 - **ARM toolchain.** Distribution and vendor cross compilers will lag
   behind GCC 16, so the project provides its own: a container image with an
   `aarch64-linux-gnu` GCC 16 cross compiler and a sysroot taken from the
   target. Deployments link libstdc++ statically, so the board needs no new
   runtime library; only the sysroot's glibc version has to match the target.
-- **Clang** is not a supported compiler. It cannot build the reflection
-  tier, and no CI job depends on it. Clang-based tools (clangd,
-  clang-tidy) will not parse headers that use reflection or annotations;
-  the `-std=c++23` fallback mode exists partly so that such tools can still
-  be run on the core.
-- CI on GitHub Actions, Linux only: GCC 16 in both build modes, on x86-64
-  and AArch64, with ASan, UBSan and TSan jobs.
+- **Clang** cannot build `rtt3` at all until it implements reflection. No
+  CI job depends on it, and clangd and clang-tidy will not parse `rtt3`
+  headers or component code in the meantime.
+- CI on GitHub Actions, Linux only: GCC 16 on x86-64 and AArch64, with
+  ASan, UBSan and TSan jobs.
 - New test suite in a current framework (open question 9). The existing
   Boost.Test files are not ported, since they exercise an API that no
   longer exists; they are read as a specification when writing new tests.
@@ -195,7 +194,7 @@ exceptions enabled, because two sources remain that `rtt3` does not control:
   moves the component to its fault state, as RTT 2.x does today. This is
   for components that wrap third-party code that throws.
 
-Reflection queries in the C++26 tier may signal errors with exceptions
+Reflection queries may signal errors with exceptions
 during constant evaluation; that happens in the compiler and has no
 run-time effect.
 
@@ -285,59 +284,51 @@ struct Controller {
   constraint, reported at the call site.
 - The connection policy is a type wherever it is known statically, so the
   buffer implementation is selected at compile time.
-- Metadata (port list, names, documentation, properties, operations) is
-  one constant, found through a single customisation point:
-
-  ```cpp
-  template <> inline constexpr auto rtt3::describe<Controller> = rtt3::component_info{
-      rtt3::name{"Controller"},
-      rtt3::port{&Controller::state,   "state",   rtt3::doc{"Measured joint state"}},
-      rtt3::port{&Controller::command, "command"},
-      rtt3::property{&Controller::gain, "gain"},
-      rtt3::operation{&Controller::reset, "reset", rtt3::own_thread},
-  };
-  ```
-
-  Reflection (4.7) generates this by default; it is written by hand only
-  to override what reflection produces or in the `-std=c++23` fallback mode. Names exist only in this table. A system that never
-  asks for a name does not link them; where an identifier is needed at run
-  time it is a compile-time hash of the name.
-- Operations are member functions listed in the description and called
+- Metadata is not written separately. The port list, names, properties
+  and operations are read from the struct by reflection (4.7), and
+  anything the declaration cannot express is an annotation on the member.
+  Names exist only in tables generated at compile time; a system that
+  never asks for a name does not link them, and where an identifier is
+  needed at run time it is a compile-time hash of the name.
+- Operations are annotated member functions, called
   through a typed handle (`rtt3::caller<&Controller::reset>`), with
   own-thread and client-thread execution and an asynchronous `send` that
   returns a typed handle. Signatures are handled with variadic templates,
   `std::invoke` and `std::tuple`; engine messages are
   `std::move_only_function` in fixed-capacity storage.
-- Properties are ordinary data members listed in the description. Reading
+- Properties are annotated data members. Reading
   and writing them from a file is an `rtt3-reflect` feature.
 
 ### 4.5 Compile-time deployment
 
-A deployment is a type listing components, activities and connections:
+A deployment is a struct. Its data members are the nodes, annotations give
+each node its activity, and a constant member lists the links:
 
 ```cpp
-using App = rtt3::deployment<
-    rtt3::node<Sensor,     rtt3::periodic<1ms, rtt3::priority<80>>>,
-    rtt3::node<Controller, rtt3::periodic<1ms, rtt3::priority<79>>>,
-    rtt3::node<Driver,     rtt3::triggered<&Driver::command_in>, rtt3::tag<"left">>,
-    rtt3::node<Driver,     rtt3::triggered<&Driver::command_in>, rtt3::tag<"right">>,
-    rtt3::link<&Sensor::state,       &Controller::state,                    rtt3::policy::data>,
-    rtt3::link<&Controller::command, rtt3::at<"left",  &Driver::command_in>, rtt3::policy::buffer<8>>,
-    rtt3::link<&Controller::command, rtt3::at<"right", &Driver::command_in>, rtt3::policy::buffer<8>>
->;
+struct App {
+    [[=rtt3::periodic(1ms), =rtt3::priority(80)]] Sensor     sensor;
+    [[=rtt3::periodic(1ms), =rtt3::priority(79)]] Controller ctrl;
+    [[=rtt3::triggered_by(&Driver::command_in)]]  Driver     left, right;
+
+    static constexpr auto links = rtt3::links(
+        rtt3::link(&App::sensor, &Sensor::state,       &App::ctrl,  &Controller::state),
+        rtt3::link(&App::ctrl,   &Controller::command, &App::left,  &Driver::command_in, rtt3::policy::buffer<8>{}),
+        rtt3::link(&App::ctrl,   &Controller::command, &App::right, &Driver::command_in, rtt3::policy::buffer<8>{}));
+};
 
 int main() { return rtt3::run<App>(); }
 ```
 
-What the compiler does with it:
+Instances are identified by their data member, so several nodes of one
+component type need no tags. What the compiler does with it:
 
 - **Validation**: value types match, every required input is connected, no
   input has two writers unless its policy allows it, triggering ports
-  belong to their node. Failures are concept or `static_assert` errors with
-  constexpr-built messages.
-- **Storage**: components, channels and buffers are members of `App` with
-  sizes known at compile time. Nothing is allocated at start-up and the
-  deployment can sit in static storage.
+  belong to their node. Errors name the member, for example
+  "input `App::right.command_in` has no writer".
+- **Storage**: components, channels and buffers have sizes known at
+  compile time. Nothing is allocated at start-up and the deployment can sit
+  in static storage.
 - **Scheduling**: nodes that share a period and priority can be folded into
   one thread with a fixed execution order, computed from the link graph
   (topological order; cycles are errors unless broken with a delayed link).
@@ -348,6 +339,10 @@ What the compiler does with it:
 - **Dead code**: no factories, name tables or type descriptions are linked
   unless `rtt3-reflect` is used.
 
+Optional `rtt3::autowire<App>` connects outputs to inputs whose name and
+value type both match, with ambiguity a compile error. It is off by
+default; explicit links are the norm.
+
 `rtt3::reflect::expose(app)` makes a static deployment visible to runtime
 tooling and lets dynamically loaded components attach to it.
 
@@ -355,13 +350,13 @@ tooling and lets dynamically loaded components attach to it.
 
 A new design, not a port of the classic interfaces. Scope:
 
-- Name tables built from `rtt3::describe<T>`: look up a node, port,
+- Name tables generated by reflection: look up a node, port,
   property or operation by name and obtain a type-erased handle.
 - Type-erased connection of two ports by name, with the type check done by
   comparing compile-time type identifiers. This is the one place a runtime
   type check remains.
 - Type descriptions for data types (member names and types, enum value
-  names), supplied through `describe<T>` in C++23 and generated in C++26.
+  names), generated by reflection from the type alone.
   They drive property files, logging of port data and any transport.
 - Property files: load and save the described properties of a component.
   Format is open question 10.
@@ -369,58 +364,46 @@ A new design, not a port of the classic interfaces. Scope:
 - An introspection interface sufficient for a task browser or reporter to
   be written against it. Those tools themselves are outside this plan.
 
-### 4.7 C++26 reflection (GCC 16)
+### 4.7 Reflection (GCC 16)
 
-With GCC 16 as the only supported compiler, reflection is available in
-every supported build and is the default way a component is described:
-the `describe<T>` tables are generated from the declarations themselves.
-The hand-written form of 4.4 stays as an explicit override and as the
-fallback if the experimental feature changes or has to be switched off.
+Reflection is the description mechanism of `rtt3`. There is no other.
 
 **What GCC 16 provides.** Reflection is experimental and off by default; it
 needs `-std=c++26 -freflection` and the `<meta>` header. Status below is
 from the GCC 16 release notes and the cppreference support table; it has
 not been compile-tested here, as this plan was written on a machine with
-GCC 13 only.
+GCC 13 only. Confirming it on the real toolchain is the first task of
+phase 0, because the whole design now rests on it.
 
 | Paper | Feature | Use here |
 |---|---|---|
 | P2996R13 | `^^` operator, splicers, `std::meta::info`, `<meta>` queries | Everything below |
-| P3394R4 | Annotations, `[[=value]]` | Port, operation and property metadata |
+| P3394R4 | Annotations, `[[=value]]` | Port, operation, property and activity metadata |
 | P3096R12 | Function parameter reflection | Operation argument names and types |
-| P3293R3 | Splicing a base class subobject | Type descriptions for derived structs |
+| P3293R3 | Splicing a base class subobject | Descriptions of derived data types |
 | P3491R3 | `define_static_string`, `define_static_object`, `define_static_array` | Placing generated tables in static storage |
 | P3795R2 | Reflection clean-ups | - |
 | P1306 | Expansion statements, `template for` (experimental) | Iterating members without recursive templates |
 
-To confirm on a real GCC 16 before design freeze: P3560 (error handling in
-`std::meta` functions) and P3068 (constexpr exceptions) were not confirmed
-by the sources available. Mainline Clang and MSVC are reported to have no
-P2996 support yet.
+To confirm on a real GCC 16: P3560 (error handling in `std::meta`
+functions) and P3068 (constexpr exceptions) were not confirmed by the
+sources available.
 
-**Rules.**
-
-- On by default; compiled out when `__cpp_impl_reflection` and
-  `__cpp_lib_reflection` are not defined (the `-std=c++23` mode). Header-only, under `rtt3/meta/`; the built libraries never
-  depend on it.
-- Reflection fills the primary template of `rtt3::describe<T>`. An explicit
-  specialisation always wins. It adds no runtime data structure of its own,
-  and CI checks that a reflected and a hand-written description of the same
-  component are identical.
-- `<meta>` is included only from `rtt3/meta/` because of its compile-time cost.
-
-**Uses.**
+**How it is used.**
 
 - *Port discovery*: walk `nonstatic_data_members_of(^^T, ctx)` and keep
   members whose type is a specialisation of a port template.
 - *Names*: `identifier_of(member)`, placed in read-only storage with
   `define_static_string`.
-- *Annotations* replace the remaining entries of the description:
+- *Annotations* carry everything the declaration cannot express:
 
   ```cpp
   struct Driver {
       [[=rtt3::doc("Joint command"), =rtt3::event]]
       rtt3::input_port<JointCommand> command_in;
+
+      [[=rtt3::name("status")]]                 // override the identifier
+      rtt3::output_port<Status> status_out;
 
       [[=rtt3::property, =rtt3::unit("rad/s")]]
       double max_velocity = 1.0;
@@ -428,31 +411,46 @@ P2996 support yet.
       [[=rtt3::operation(rtt3::own_thread), =rtt3::doc("Clear a latched fault")]]
       std::expected<void, rtt3::error> reset(int axis) noexcept;
 
+      [[=rtt3::hidden]]                         // not part of the interface
+      rtt3::output_port<Debug> trace;
+
       void update() noexcept;
   };
   ```
 
-  Argument names come from `parameters_of`. A header using `[[=...]]` is a
-  C++26 header; there is no wrapper macro.
-- *Type descriptions* for aggregate data types and enums, generated from
-  the type alone (`nonstatic_data_members_of`, `bases_of`,
-  `enumerators_of`). This removes the need for typekits for plain structs.
-- *Deployment as a struct*: nodes are data members with activity
-  annotations, so instances are identified by member instead of by tag.
-  The same validation as 4.5 runs over the reflected members.
-- *Diagnostics* that name the offending member, for example
-  "input `App::right.command_in` has no writer".
+  Operation argument names come from `parameters_of`.
+- *Data types*: member names and types, bases (`bases_of`) and enum value
+  names (`enumerators_of`) are read from the type alone, so plain structs
+  and enums need no typekit and no annotation. A type from another library
+  is reflected the same way; if its public members are not the right view
+  of it, it is wrapped in a struct that is.
+- *Deployments*: nodes and their activities, as in 4.5.
+- Only public members are reflected. Private ports and properties are not
+  part of a component's interface.
+
+**Containing the dependency.** Requiring an experimental feature with no
+fallback is the largest technical risk in the plan. Three measures limit it:
+
+- All uses of `<meta>` are confined to one internal module, `rtt3/meta/`,
+  whose only output is a small set of ordinary constexpr tables
+  (`component_info`, `type_info`, `deployment_info`). The rest of the
+  library, including validation, scheduling and `rtt3-reflect`, consumes
+  those tables and never touches a reflection value. A change in the
+  feature is then a change in one module.
+- A reflection conformance test set exercises exactly the queries that
+  module relies on, independent of the rest of `rtt3`. It runs first in CI
+  and is the gate for moving to a new GCC release.
+- The tables have a documented plain-C++ form. This is not a supported
+  user API, but it means that if reflection had to be abandoned, a
+  hand-written or generated description could be reintroduced without
+  redesigning the layers above.
+
+`<meta>` is costly to include; keeping it in one module also keeps that
+cost out of most translation units. Compile time is tracked from phase 0.
 
 **Not planned.** `define_aggregate` (generating new class types) until
 there is a concrete need. Contracts, also experimental in GCC 16, are a
 separate topic.
-
-**Risk.** The feature is behind an experimental flag in one compiler and
-may change in GCC 16 point releases and in GCC 17, and the project now
-relies on it by default. Two things contain that: it only produces tables
-that can also be written by hand, and the `-std=c++23` mode is built and
-tested in CI, so a regression in the compiler costs convenience, not
-function. The exact GCC 16 point release is pinned in the toolchain image. Only public members are reflected by default.
 
 ### 4.8 Macro policy
 
@@ -479,7 +477,7 @@ namespace scope:
 inline const rtt3::plugin::registrar<Sensor> sensor_registration;
 ```
 
-The registrar adds a typed factory, named from `describe<Sensor>`, to a
+The registrar adds a typed factory, named from the reflected type, to a
 registry owned by `librtt3-reflect`; the loader opens the library and reads
 what was added. There are no `extern "C"` entry points. The exact spelling
 is settled with a test that registration survives static archives and
@@ -487,7 +485,6 @@ is settled with a test that registration survives static archives and
 
 **Macros that remain**, all internal to library headers: include guards or
 `#pragma once`; one symbol-visibility macro from a generated export header;
-`#if` on the two reflection feature-test macros to include the C++26 tier;
 the test framework's assertion macros in tests. CI fails on any new
 `#define` outside an allow-list.
 
@@ -508,15 +505,14 @@ Each phase ends with tests green on x86-64 and AArch64.
 
 | Phase | Content | Exit criterion |
 |---|---|---|
-| 0. Baseline | Fork, GCC 16 toolchain image (native and AArch64 cross), new CMake and CI beside the old tree, benchmark harness, RTT 2.x numbers recorded on desktop and ARM board | Reproducible baseline; empty `rtt3` libraries build and install next to RTT 2.x |
+| 0. Baseline | Fork, GCC 16 toolchain image (native and AArch64 cross), reflection conformance tests and a spike of `rtt3/meta/` on the real compiler, new CMake and CI beside the old tree, benchmark harness, RTT 2.x numbers recorded on desktop and ARM board | Reproducible baseline; every reflection feature in 4.7 confirmed working or the plan revised; empty `rtt3` libraries build and install next to RTT 2.x |
 | 1. OS layer | `rtt3::os`, memory locking, graceful downgrade, logger front end, simulated clock | Thread, timing and lock tests pass; wake-up latency measured on the ARM board |
 | 2. Lock-free primitives | Data object, buffers, queues, pool | Stress and model-checking tests pass on both architectures |
-| 3. Components and ports | `component` concept, ports, channels, policies, `connect`, activities, lifecycle, error type | Hand-wired example runs; port latency no worse than baseline |
-| 4. Static deployment | `rtt3::deployment`, validation, scheduling fold, channel selection, `run` | Example system runs with zero allocations after start-up and no string handling |
-| 5. Operations, properties, description | `describe<T>` written by hand first, then generated by reflection (4.7); typed callers, engine messages | Operation call cost no worse than baseline; reflected and hand-written descriptions identical in CI |
-| 6. Runtime layer | `rtt3-reflect`: names, type-erased connect, type descriptions, property files, registrar and loader, `expose` | A static deployment can be inspected and extended at run time; an RTT 2.x and an rtt3 component load into one process |
-| 7. Reflection extras | Reflected type descriptions for data types, deployment as a struct, member-naming diagnostics | Example system written with no hand-written descriptions at all |
-| 8. Release | Delete the old `rtt/` tree, migration guide with a worked port of a real component, API and ABI policy | Tagged 3.0 |
+| 3. Components and ports | `rtt3/meta/` component tables, `component` concept, ports, channels, policies, `connect`, activities, lifecycle, error type | Hand-wired example runs; port latency no worse than baseline |
+| 4. Static deployment | Deployment struct, validation, scheduling fold, channel selection, `run` | Example system runs with zero allocations after start-up and no string handling |
+| 5. Operations and properties | Annotated operations and properties, typed callers, engine messages | Operation call cost no worse than baseline |
+| 6. Runtime layer | `rtt3-reflect`: names, type-erased connect, reflected data-type descriptions, property files, registrar and loader, `expose` | A static deployment can be inspected and extended at run time; an RTT 2.x and an rtt3 component load into one process |
+| 7. Release | Delete the old `rtt/` tree, migration guide with a worked port of a real component, API and ABI policy | Tagged 3.0 |
 
 Phases 1 and 2 do not depend on any open question. Phases 3 to 5 depend
 on questions 2 and 3; phase 6 on questions 1, 4 and 10.
@@ -532,14 +528,17 @@ on questions 2 and 3; phase 6 on questions 1, 4 and 10.
   the lock-free and activity tests first.
 - **Lock-free rewrites** can introduce rare ordering bugs that x86 hides.
   Mitigation: 4.9 verification on ARM.
-- **Compile time and error quality** of deployment templates on large
-  systems. Mitigation: benchmark from phase 0; keep checks in constexpr
-  functions over index arrays instead of deep recursive templates.
-- **Single, very recent compiler.** GCC 16 only, with an experimental
-  feature on by default. Mitigation: pinned toolchain image, the tested
-  `-std=c++23` fallback mode, static linking of libstdc++ on the target.
-- **Tooling.** clangd and clang-tidy cannot parse reflection code; IDE
-  support for component headers will be limited until Clang catches up.
+- **Compile time and error quality** on large systems. Mitigation:
+  benchmark from phase 0; keep checks in constexpr functions over the
+  generated tables.
+- **Dependence on an experimental compiler feature, with no fallback.**
+  If GCC changes or withdraws part of reflection, `rtt3` does not build
+  until it is adapted, and no other compiler can stand in. Mitigation: the
+  containment measures in 4.7, a pinned toolchain image, and the phase 0
+  spike before anything else is built on it.
+- **Tooling.** clangd and clang-tidy cannot parse `rtt3` code at all until
+  Clang implements reflection, so editor support and static analysis are
+  limited to what GCC provides.
 - **Ecosystem.** OCL (deployer, taskbrowser, reporting), typegen/orogen and
   rtt_ros integration do not work with `rtt3` and are outside this plan.
 - **Licence.** The tree is GPL v2 with a linking exception. Code written
@@ -574,10 +573,8 @@ on questions 2 and 3; phase 6 on questions 1, 4 and 10.
 11. **Runtime tooling**: how much by-name runtime access do you actually
     use (task browser, reporter, deployer XML)? This sets how large
     `rtt3-reflect` needs to be, and whether phase 6 can shrink.
-12. **Fallback mode**: keep the hand-written `describe<T>` path and the
-    `-std=c++23` build mode as insurance (as planned), or require
-    reflection outright? Requiring it removes a build mode and some code,
-    but ties every component to an experimental compiler flag.
+12. **Fallback mode**: decided. Reflection is required; there is no
+    C++23 mode and no hand-written description path.
 13. **Exceptions from user hooks**: is `noexcept` hooks with termination
     the right default, with `catch_exceptions` as opt-in, or the reverse?
 14. **Project name and licence**: is the package published as `rtt3`, does
