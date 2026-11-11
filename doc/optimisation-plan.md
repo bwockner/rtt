@@ -92,6 +92,34 @@ thread in the process.
 - ABI: recompile (`operator<<` is a template in `Logger.inl`). `Logger`
   uses a private implementation pointer, so its layout does not change.
 
+**D4. Memory is not locked or prepared on the Linux target.**
+`mlockall` is called for the Xenomai and RTAI targets but nowhere for
+gnulinux (the only matches are `rtt/os/xenomai/fosi_internal.cpp:82` and
+`rtt/os/lxrt/fosi_internal.cpp:75`), and the allocator is left at its
+defaults. Real-time threads can therefore take page faults on first touch
+of heap or stack, and any thread freeing a large block can cause memory
+to be unmapped, which interrupts all cores running the process.
+
+- Change: at main-thread start-up on gnulinux, behind an option and an
+  environment switch, call `mlockall(MCL_CURRENT | MCL_FUTURE)`, set
+  `M_TRIM_THRESHOLD` and `M_MMAP_MAX` so the heap neither shrinks nor maps
+  separate regions, and prefault new thread stacks. Failure for lack of
+  privilege is logged and ignored, so desktop testing is unaffected.
+- ABI: none.
+
+**D5. The real-time memory pool can grow at run time.**
+When TLSF is enabled, the options that let the pool grow through `sbrk`
+and `mmap` are on by default (`rtt/CMakeLists.txt:117-118`), so an
+allocation from a real-time thread can end in a system call and page
+faults. `OperationCaller::send` allocates from this pool on every call
+(`rtt/internal/LocalOperationCaller.hpp:708`), and from the general heap
+when TLSF is disabled (`:700`).
+
+- Change: no code change; size the pool for the application at start-up,
+  build with pool growth off for deployment, and use the existing pool
+  statistics to find the right size. Document this.
+- ABI: none.
+
 ### 3.2 Data-flow path (highest value for throughput)
 
 A write followed by a read passes through a chain of channel elements.
@@ -266,13 +294,29 @@ Context switches, in particular:
   the existing CPU affinity argument of `Activity`, and avoid equal
   priorities on one core.
 
+System calls and allocation, in particular:
+
+- **Find them first.** Run the deployed system under `strace -f -c` or
+  `perf trace -s` for a minute and look at the per-thread counts for the
+  real-time threads. Anything beyond the periodic sleep and the wake-ups
+  between components is a candidate. `perf stat -e page-faults` per thread
+  should read zero after start-up.
+- **Reserve capacity in `configureHook`**: size vectors and strings there
+  and call `setDataSample`, so that `updateHook` never grows a container.
+- **Keep I/O out of `updateHook`**: file and console output, including
+  logging at a level that is actually written, belongs in a non-real-time
+  component fed through a buffered port.
+- **`send` allocates per call** (see D5). In a hot loop, keep and reuse
+  the `SendHandle` pattern sparingly, or use a port instead of an
+  operation for high-rate data.
+
 ## 4. Order of work
 
 | Step | Items | ABI effect | Why this order |
 |---|---|---|---|
 | 0 | Benchmarks and baseline | none | Everything else is judged against it |
 | 1 | B1, B2, B3, B4 | none | No code change; immediately reversible |
-| 2 | D1, D2 | none | Largest determinism gain; library-only change |
+| 2 | D1, D2, D4, D5 | none | Largest determinism gain; library-only or configuration-only changes |
 | 3 | D3 | recompile | Removes a process-wide lock from real-time paths |
 | 4 | F3, F4, F1 step 1, F2 | recompile | Mechanical; together they remove most per-hop overhead |
 | 5 | F5, E2 (code part) | recompile | Depends on measurements from step 4, mainly on ARM |

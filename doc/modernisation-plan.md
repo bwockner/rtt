@@ -887,6 +887,102 @@ CI runs the example deployment and fails if the number of wake-ups per
 cycle rises. `perf sched` and the `sched_switch` tracepoint are the tools
 for finding the cause when it does.
 
+#### Memory allocation
+
+Memory is obtained in three stages, each stricter than the one before.
+
+| Stage | When | What is allowed |
+|---|---|---|
+| Static | Build time | Everything whose size follows from types and link policies: components, channels, buffers, engine queues. It is one object, in static storage or one allocation. |
+| Configuration | Between process start and the first cycle | A bounded arena for sizes that come from the machine file: data samples for `dynamic_data` ports, buffer capacity overrides, loaded component libraries. |
+| Run | After start | No allocation and no release, by any real-time thread. |
+
+**Static stage.** Buffer capacities are part of the link policy type, so
+storage is an array member, not a pointer to the heap. Engine message
+queues and their payload pools are sized from the operations each node
+declares.
+
+**Configuration stage.**
+- One monotonic arena (`std::pmr::monotonic_buffer_resource`) serves all
+  configuration-time requests and is never freed. Its upper bound is
+  stated in the machine file; exceeding it is a start-up error, so memory
+  use is known before the machine runs.
+- Ports that carry `dynamic_data` get their per-slot capacity from a data
+  sample here. Writing a larger value at run time returns a status; it
+  does not grow the slot.
+- All memory is then locked (`mlockall` with current and future pages)
+  and touched, including thread stacks, which have explicit sizes.
+
+**Run stage.**
+- Fixed-size block pools with lock-free free lists serve the few things
+  that are created and destroyed per operation, mainly asynchronous
+  operation requests. An empty pool returns an error to the caller.
+- Bounded types are the default for variable-length data
+  (`std::inplace_vector`, fixed-capacity strings). Where variable-size
+  allocation in a real-time thread is unavoidable, typically inside
+  third-party code, a per-thread TLSF resource gives constant-time
+  allocation without a lock. It is opt-in per node.
+- Library code on the update path avoids the standard facilities that
+  allocate behind the scenes: `std::function` (replaced by fixed-storage
+  callables), `std::string` construction, `std::shared_ptr`, stream and
+  format output, and exceptions.
+
+**The general-purpose heap** is still used by helper threads. It is
+configured at start so that it never returns memory to the kernel or maps
+new regions for large blocks (`M_TRIM_THRESHOLD`, `M_MMAP_MAX`), and it is
+pre-grown. This matters to the real-time threads even though they do not
+allocate: unmapping memory anywhere in the process interrupts every core
+running one of its threads. Transparent huge pages are left to explicit
+request only, to avoid background compaction stalls.
+
+**Enforcement.**
+- At compile time, the port data concepts (4.4) reject allocating types
+  on ports that have not opted in.
+- In test builds, an allocation guard replaces the global allocation
+  functions and aborts with a backtrace if one is called from a thread
+  marked real-time after start. The whole test suite and the example
+  deployments run with the guard on.
+- At run time, the start-up report states static, arena and locked sizes,
+  and per-thread page-fault counts are exposed through the inspection
+  service with an expected value of zero after start.
+
+#### System calls at run time
+
+The target for a real-time thread is **one system call per cycle**: the
+call that puts it to sleep until its next activation. Everything else is
+either done in user space or moved to a helper thread.
+
+| Need | How it is met without a system call per cycle |
+|---|---|
+| Sleep until next period | `clock_nanosleep` with an absolute time; this is the one call |
+| Read the clock | vDSO `clock_gettime`. The start-up report verifies that the kernel's clock source allows it; on a fallback clock source every read becomes a real system call |
+| Wake another thread | Pending-flag check first, coalesced and deferred to the end of the cycle; a system call only when the target is actually asleep |
+| Locks | None on the update path; elsewhere uncontended locks stay in user space |
+| Memory | No `mmap`, `brk`, `munmap` or `madvise` after start (see above), and no page faults |
+| Logging | Lock-free ring, drained and written by a helper thread |
+| Inspection and simulation | Rings to helper threads; the helper batches datagrams (`recvmmsg`, `sendmmsg`) so that socket traffic costs a few calls per cycle, not one per port |
+| Scheduling attributes, affinity, thread names | Set once at start, never per cycle |
+| Timers and signals | Not used; no POSIX timers, no signal handlers, no timer file descriptors that need a read per expiry |
+| Waiting on file descriptors | One `epoll_wait` per activation for all descriptors of that thread, then drain until empty |
+
+Device I/O inside a driver component is the driver's own business, but
+the same rule is recommended and documented: batch per cycle, and prefer
+memory-mapped or polled interfaces to a call per item.
+
+Kernel entries that are not system calls are reduced by the same means as
+in the two sections above: no page faults, interrupts steered off the
+real-time cores, the periodic tick disabled on isolated cores, and no
+unmapping elsewhere in the process.
+
+**Enforcement.**
+- A strict test mode installs a per-thread system call filter (seccomp)
+  on each real-time thread after start, allowing only the calls in the
+  table. Any other call raises a signal that the test reports with a
+  backtrace. This turns "no unexpected system calls" from a guideline
+  into a failing test.
+- The benchmark suite records system calls per cycle per thread and fails
+  when the count rises.
+
 ## 5. Phasing
 
 Each phase ends with tests green on x86-64 and AArch64.
