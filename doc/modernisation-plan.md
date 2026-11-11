@@ -1583,6 +1583,9 @@ their own document, `numerics.md`. In summary:
   option can remove; it is on by default for links into actuators.
 - Real-time threads set their floating-point state explicitly at start
   and flush subnormals to zero by default.
+- Eigen types are supported as port data through an optional adaptor;
+  their alignment depends on compiler flags, so they are encoded member
+  by member between machines.
 
 ## 5. Phasing
 
@@ -1728,8 +1731,5 @@ on questions 2 and 3; phase 6 on questions 1, 4 and 10.
       block, stepped in lock) wanted for CI?
     - Does the simulator already have subsystems?
 20. **SIMD and numerics**: agreement within tolerance, with performance
-    first, is decided. Remaining points: is flushing subnormals to zero on
-    real-time threads acceptable as the default? Do port data types today
-    contain vector types from a linear-algebra library, and which one? Is
-    there any cross-checking between two computers, or any checksum over
-    computed values, that would need identical results?
+    first, is decided, and Eigen is the linear-algebra library. The
+    remaining points are listed at the end of `numerics.md`.

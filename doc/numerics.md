@@ -80,6 +80,120 @@ floating-point control state at start, from the deployment:
 - On AArch64 the baseline is NEON. Scalable vectors are not used in port
   data, for the same reason as `std::simd`.
 
+## Eigen
+
+Eigen is the linear-algebra library used downstream for state estimation
+and control, so its types will appear inside blocks, in block signatures
+and on ports. The statements about Eigen below are from knowledge of the
+library and were not checked against the version in use; the ones that
+matter are written as compile-time checks so they verify themselves.
+
+### Fixed-size types as port data
+
+- Fixed-size Eigen types (`Vector3d`, `Matrix4d`, `Quaterniond`, and
+  fixed-size `Matrix<double, N, M>`) are the intended port data for
+  vectors and matrices: no allocation, size known at compile time.
+- They are classes with private storage, so the generic "reflect the
+  public members" rule does not describe them. An optional adaptor header
+  in the block package teaches the schema, the wire encoding, the logger
+  and the `rtt3::finite` check about them: a fixed-size matrix is a named
+  array of scalars with its shape. The adaptor is separate so that neither
+  the framework nor blocks that do not use Eigen include it.
+- Quaternions are encoded with named fields. Eigen stores coefficients in
+  the order x, y, z, w but its constructor takes w first, which is a
+  classic source of silent errors when data crosses a boundary; a schema
+  with names removes the ambiguity for the simulator and tools.
+- The adaptor asserts at compile time what it relies on (for example that
+  the type is trivially copyable in the Eigen version in use) and falls
+  back to coefficient-wise copying where an assumption does not hold.
+
+### Alignment depends on compiler flags
+
+This is the main hazard. The alignment of fixed-size vectorisable Eigen
+types follows the instruction set the translation unit is compiled for:
+16 bytes with SSE or NEON, 32 with AVX. Consequences:
+
+- **Within one program**, every translation unit that sees a given struct
+  must be compiled with the same vector flags, or the struct has two
+  different layouts and the program is broken in ways that are hard to
+  diagnose. The block package exports its flags as usage requirements, and
+  each library that carries port data types embeds the alignment it was
+  built with, so a mismatch is a link error, not a crash.
+- **Between the desktop and the ARM target**, layouts of structs
+  containing Eigen members can differ (32-byte alignment with AVX on
+  x86-64, 16 with NEON). So raw bytes of such a struct are never sent
+  between machines. The wire encoding writes scalars member by member,
+  and the schema hash is computed from names, scalar types and shapes, not
+  from offsets and padding. A type whose layout differs is then still the
+  same type to the simulator and the tools.
+- Capping Eigen's static alignment at 16 bytes on every platform
+  (`EIGEN_MAX_STATIC_ALIGN_BYTES`) would make layouts match and costs
+  little, since unaligned vector loads are cheap on current processors.
+  It is an option to decide once, project-wide; mixing settings is the
+  failure case.
+
+### Allocation
+
+- Dynamic-size types (`MatrixXd`, `VectorXd`) allocate. On ports they are
+  `dynamic_data` and need the explicit opt-in and data sample
+  (`modernisation-plan.md`, section 4.4).
+- Where the size is only known at configuration but has a bound, use
+  Eigen's bounded form (dynamic size with fixed maximum rows and columns).
+  It stores inline and qualifies as bounded data.
+- Inside blocks, the usual sources of hidden allocation are temporaries
+  from expressions on dynamic-size operands, and decomposition objects.
+  Construct decompositions with their size during configuration and reuse
+  them; use `noalias()` where a product is assigned to a distinct
+  destination.
+- The framework's allocation guard catches any of this in tests. Eigen's
+  own switch for forbidding allocation at run time can be turned on in
+  debug builds as a second net that reports the Eigen expression
+  responsible.
+
+### Threads and back ends
+
+- Eigen can parallelise large products with OpenMP when the program is
+  built with it. That must be off (`EIGEN_DONT_PARALLELIZE`) for anything
+  running in a real-time thread: worker threads would be created outside
+  the deployment's scheduling and affinity.
+- For the same reason, Eigen is not configured to delegate to an external
+  BLAS or LAPACK library in real-time code; those may start threads and
+  allocate.
+- Eigen's assertions are disabled in deployment builds and enabled in
+  test builds, where they catch size and aliasing errors.
+
+### Compiler options
+
+- Eigen follows the compiler's vector flags, so the per-machine target
+  CPU setting above is all that is needed to get vectorised code.
+- The exclusion of `-ffinite-math-only` matters for Eigen in particular:
+  its own finiteness tests (`allFinite()`, `hasNaN()`) and the checks
+  inside some decompositions rely on NaN semantics.
+
+### Numerical robustness in estimation and control
+
+Tolerance-based agreement with the simulator assumes the algorithm is
+well conditioned. The places in estimation and control code where small
+differences are amplified, and where simulation may not reveal the
+problem at the same operating point as the real machine:
+
+- Solve with a decomposition, not with an explicit inverse, and check the
+  decomposition's status before using the result.
+- Covariance matrices lose symmetry and positive definiteness through
+  rounding; use an update form that preserves them (Joseph form or a
+  square-root formulation) and compare them with a tolerance.
+- Regularise near kinematic singularities; behaviour there is dominated by
+  conditioning, not by the arithmetic.
+- A failed decomposition or a division near zero produces non-finite
+  values that then spread through the state. Mark estimator outputs and
+  commands `rtt3::finite` so that this stops at the block boundary.
+
+### Versions
+
+One Eigen version is pinned for both the simulator and the target and
+recorded in the block package, since alignment defaults and
+trivial-copyability of fixed-size types have changed between releases.
+
 ## Agreement between the simulator and the target: within tolerance
 
 Decided: performance comes first, and the simulator and the real
@@ -178,6 +292,14 @@ a build with every fast-math option on.
   (`rtt/os/tlsf/tlsf.c:138`). A type that needs 32-byte alignment is not
   guaranteed it when allocated through `rt_allocator`. Check any such
   types used with real-time strings, containers or `send`.
+  With Eigen this is a concrete risk on x86-64 builds that enable AVX:
+  fixed-size vectorisable types then need 32 bytes, and an object holding
+  one that is allocated from the pool can be misaligned, which faults on
+  an aligned load. Builds limited to SSE or NEON need only 16 bytes and
+  are unaffected.
+- **Eigen on RTT 2.x ports.** Dynamic-size vectors need `setDataSample`
+  with a correctly sized value before connections are made, or the first
+  writes allocate. Keep OpenMP off in real-time components.
 - **Subnormal numbers.** Flush-to-zero can be set at the start of each
   real-time thread, in the component's `configureHook` or `startHook`,
   since it is per-thread state.
@@ -190,9 +312,12 @@ a build with every fast-math option on.
 
 - Is flushing subnormals to zero on real-time threads acceptable as the
   default?
-- Do port data types today contain vector types from a linear-algebra
-  library, and which one? That decides how much over-alignment support is
-  needed first.
+- Eigen is used for state estimation and control (answered). Which
+  version, and are Eigen types on ports today fixed-size, dynamic, or
+  both? Is capping Eigen's static alignment at 16 bytes project-wide
+  acceptable, to give the same layout on x86-64 and ARM?
+- Is any Eigen code built with OpenMP or linked against an external BLAS
+  today?
 - Is there any cross-checking between two computers, or any checksum over
   computed values, that would need identical results?
 - `std::simd` in GCC 16 is experimental and unverified here, like the
