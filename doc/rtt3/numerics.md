@@ -1602,6 +1602,181 @@ fixed point to test against. Larger windows are then judged on recorded
 data and in simulation by estimation error and consistency, and on the
 target by worst-case solve time.
 
+### Putting measurements onto a time grid
+
+**Aim.** States exist only at grid times, for example every 50 or
+100 ms, while inertial samples arrive at 100 Hz from several units with
+their own sampling instants and GNSS arrives late at its own times. The
+number of states sets the cost of the solve; the number of raw
+measurement factors sets the cost of re-linearising. Both are reduced by
+turning many raw samples into few factors attached to grid states,
+without pretending a sample was taken at a time it was not.
+
+Three mechanisms, each suited to a different kind of measurement.
+
+**1. Integrate rates between grid states (pre-integration).** For each
+inertial unit, the gyroscope samples between two consecutive grid times
+are integrated into one rotation increment, and that single quantity
+becomes a factor between the two states.
+
+- Each unit is integrated on its own time stamps. The first and last
+  samples of an interval are split in proportion to the part that falls
+  inside it, so sampling skew between units is handled exactly and every
+  raw sample contributes to exactly one interval.
+- The factor's covariance is accumulated along with the increment.
+- The increment depends on the gyroscope bias. Its sensitivity to the
+  bias is accumulated too, so that when the solve changes the bias
+  estimate the increment is corrected to first order instead of being
+  re-integrated from raw samples. Only a large change of bias triggers a
+  re-integration.
+- Where a unit supplies integrated angle increments itself, those are
+  summed directly.
+
+This replaces ten or so rate factors per unit per interval by one, and
+it is the main reduction.
+
+**2. Combine repeated observations of a slowly varying quantity.**
+Accelerometer inclination is observed a hundred times a second but
+changes slowly. Within one interval the samples are brought to the grid
+time using the motion the gyroscopes measured over the same interval,
+and combined with weights from their covariances into one factor at
+that state.
+
+- The combined factor's covariance must not shrink as if the samples
+  were independent. With disturbances correlated over a time T, an
+  interval of length Δ holds about Δ / T independent samples, not Δ
+  times the sample rate. This is the correlated-sample treatment
+  described earlier, applied at the point where samples are merged.
+- Resampling helps the noise model here: once the interval is longer
+  than the disturbance's correlation time, the combined factors of
+  successive intervals are close to independent, which is what the
+  estimator assumes. Choosing the grid spacing above the measured
+  correlation time is therefore a design rule, not only a cost saving.
+
+**3. Attach a measurement at its true time by interpolating between the
+two neighbouring states.** A GNSS fix valid at a time between two grid
+states becomes a factor on both of them, with the state at the
+measurement time obtained by interpolation.
+
+- Because the state includes rates, the interpolation uses position and
+  rate at both ends (a constant-acceleration-noise model between grid
+  states), not a straight line between poses. On the group-valued parts
+  it is done in the tangent space.
+- The factor involves only two adjacent states, so the block-tridiagonal
+  structure is untouched.
+- Latency is handled by the same mechanism: the fix attaches to whichever
+  pair of states brackets its time stamp.
+
+**What stays as it was.** The disturbance that accumulates along the
+chain keeps its structure under integration and averaging: the combined
+quantities of the units along the chain are correlated in the same
+pattern, with smaller magnitude. The single joint factor per interval
+for all inertial units, whitened by a factor of that covariance, remains
+the form.
+
+**Choosing the grid.**
+
+- Spacing above the disturbance correlation time and well below the time
+  scale of the motion to be estimated; a few intervals per period of the
+  fastest motion of interest.
+- A fixed, uniform grid. Grid times are multiples of a base period, so
+  the structure of the problem never changes.
+- The newest grid state lags the present by up to one interval. The
+  real-time predictor carries the estimate from there to the current
+  instant using the latest inertial samples.
+
+### Removing the oldest state
+
+When a new grid state is added, the oldest one leaves the window. How it
+leaves decides whether the estimator stays consistent.
+
+**The method: marginalisation, in square-root form.** The oldest state
+is eliminated from the linearised problem, and what the eliminated
+factors implied about the next state is kept as a prior on that state.
+
+- Only three kinds of factor involve the oldest state: the prior it
+  inherited, its own measurements, and the factors linking it to the
+  next state. Because the problem is a chain, eliminating it produces a
+  prior on the next state alone, a dense block of the per-step state
+  size. There is no spread of fill-in to other states.
+- This step is the information-filter recursion. The window is a
+  smoother running in front of a Kalman filter that summarises
+  everything older.
+- It is carried out by an orthogonal factorisation of the stacked,
+  whitened Jacobians of those factors, not by forming and subtracting
+  normal-equation blocks. The prior is stored as a triangular
+  square-root information matrix with its right-hand side. This keeps it
+  positive semi-definite by construction and is the well-conditioned
+  form.
+- Cost is the cube of the per-step state size, once per grid step, with
+  a fixed operation count.
+
+**The linearisation point must be frozen.** The prior is a linearised
+summary, computed about the values the states had when the oldest one
+was removed. It is stored together with that reference value of the next
+state, and its residual is evaluated as the difference, on the manifold,
+between the current value and that reference.
+
+The subtlety: other factors on the same state are still re-linearised
+at its current value. If the prior was linearised at one value and the
+neighbouring factors at another, the estimator acquires information in
+directions that the measurements cannot actually observe, and becomes
+overconfident. Here that concerns heading in particular, which a single
+GNSS antenna does not observe while the machine is stationary. The
+standard remedy is to evaluate the Jacobians, with respect to a state
+that carries a marginalisation prior, at the frozen reference value for
+every factor touching it (first-estimate Jacobians). It costs nothing at
+run time and is the default.
+
+**Decisions that become final at the window's edge.**
+
+- A measurement folded into the prior can no longer be re-weighted or
+  rejected. The window is the last opportunity to decide that a GNSS fix
+  was an outlier, using everything that arrived after it. Robust-loss
+  weights are frozen at the value they have when the factor is
+  marginalised.
+- For the same reason the window should be at least as long as the time
+  it takes for a bad measurement to become recognisable.
+
+**States that outlive the window.** Biases and other slowly varying
+quantities can be modelled in two ways.
+
+- *One copy per grid state, linked by a slow random walk.* They are then
+  ordinary members of the per-step state and are marginalised with it.
+  The structure stays block tridiagonal.
+- *One shared copy for the whole window.* Fewer unknowns, but the shared
+  variables connect to every state, which adds a border to the
+  block-tridiagonal system. The solver handles a border by one extra
+  elimination step; marginalising a time state then leaves a prior that
+  couples the next state with the shared variables.
+
+The first is simpler and is the default; the second is worth it only if
+the number of slow states dominates the per-step state, which with three
+to six bias states per inertial unit it may.
+
+**Degenerate directions.** At start-up, and whenever something is
+unobservable for a while, the block being eliminated is singular. The
+square-root form tolerates this, and a weak initial prior on every state
+keeps the factorisation well defined without materially affecting the
+estimate.
+
+**What not to do.**
+
+- *Dropping the oldest factors without a prior* discards information;
+  the estimate then depends only on the window, and drifts in whatever
+  the window alone cannot observe.
+- *Fixing the oldest state at its estimate* treats it as perfectly
+  known, which makes everything after it overconfident. It is acceptable
+  only for quantities that are so well observed that their uncertainty
+  is negligible.
+
+**Tests specific to this step.** With linear models, the windowed
+estimator with marginalisation must reproduce the Kalman filter exactly,
+for any window length. With the real models, the consistency statistics
+in simulation, with and without first-estimate Jacobians, show whether
+spurious information is being gained, particularly in heading during
+stationary periods.
+
 ### Applied to the case at hand: an EKF with per-sensor varying covariance
 
 The filter in question is an extended Kalman filter in which each
@@ -1839,6 +2014,10 @@ a build with every fast-math option on.
     estimated?
   - At what rate does the control loop that consumes the estimate run?
   - Do recordings with all units and GNSS logged together exist?
+- For the time grid and truncation: what grid spacing is intended, and
+  do the inertial units provide integrated angle increments? Is heading
+  observed directly (two antennas) or only through motion? Are sensor
+  biases to be one copy per grid state or shared across the window?
 - The estimator is to be a truncated factor graph (stated by the
   owner). How long a window is intended, and is it set by GNSS latency
   or by something else? Should the solve run in the real-time thread or

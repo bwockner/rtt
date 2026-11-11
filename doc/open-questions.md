@@ -110,8 +110,9 @@ first.
 - **Estimator architecture**: a truncated factor graph (fixed-lag
   smoother) over the reduced state, not a pure EKF and not a cascade.
   Still open: window length and what sets it, whether the solve runs in
-  the real-time thread or beside it, which solver, and whether a delayed
-  smoothed output is wanted. See `rtt3/numerics.md`.
+  the real-time thread or beside it, which solver, whether a delayed
+  smoothed output is wanted, the grid spacing, and whether biases are
+  per grid state or shared across the window. See `rtt3/numerics.md`.
 - **Unexplained sensor motion**: when a gyroscope reports rotation the
   mechanism model cannot produce, should the system warn, model an extra
   freedom, or switch from the planar to the full model? Where are the
