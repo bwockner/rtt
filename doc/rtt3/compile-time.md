@@ -146,6 +146,76 @@ and stored as a constant, so exporting it starts nothing and cannot
 disagree with the running system. Diagnostics from failed checks are
 built as constant strings that name the offending member.
 
+## Compile-time linear algebra
+
+Eigen is the obstacle to items 1, 4 and 8 for estimation and control
+blocks. It is possible to cover a useful subset at compile time, and
+there is precedent for doing so.
+
+**What exists.**
+
+- *Eigen itself* has some support. Its test suite includes a file of
+  compile-time checks (coefficient access in `static_assert`, a global
+  `constexpr` fixed-size matrix), the class reference for the 5.0 branch
+  lists `constexpr` default constructors and coefficient access, and a
+  merge request made initialiser-list construction of fixed-size matrices
+  usable in constant expressions. That is enough to declare constant
+  matrices; it is not arithmetic, products or decompositions. Which
+  release contains which part was not established, so it has to be
+  checked against the pinned version.
+- *WPILib's `ct_matrix`* (the mathematics library of the FIRST robotics
+  software) is the closest existing project: a compile-time wrapper for
+  `Eigen::Matrix` with `constexpr` versions of multiplication, addition,
+  subtraction, dot and cross product, norm, transpose, determinant and
+  identity, an implicit conversion back to an Eigen matrix, and
+  `constexpr` geometry helpers built on it. It shows the approach works in
+  a robotics code base, and it is a reference for the design. Its licence
+  and its suitability as a dependency have not been examined.
+- *Other libraries*, from general knowledge and not checked: small
+  fixed-size linear-algebra libraries aimed at graphics (GLM and similar)
+  are largely usable in constant expressions; Blaze has `constexpr`
+  construction and access for its static types; GCE-Math provides
+  `constexpr` versions of the elementary mathematical functions, which is
+  the other half of the problem.
+
+**Proposed approach.** A small compile-time matrix type in the block
+package, not a second linear-algebra library:
+
+- `blk::ct_matrix<R, C>` over a `std::array`, with the same layout as
+  the unaligned boundary types (`numerics.md`), so conversion in either
+  direction is a copy of the scalars or nothing at all.
+- A deliberately short list of operations: construction, element access,
+  addition, subtraction, scalar and matrix product, transpose, identity,
+  dot, cross, norm, determinant and inverse up to 4 by 4, and a Cholesky
+  solve for small symmetric systems.
+- Each operation is written as one function that branches on
+  `if consteval`: during constant evaluation it runs plain loops over the
+  array; at run time it forwards to Eigen and so keeps Eigen's
+  vectorisation. A block calls one function and gets the right behaviour
+  in both situations, with no duplicated block code.
+- Elementary functions (`sqrt`, `sin`, `cos`, `exp`) follow the same
+  pattern, using the standard library at run time and, at compile time,
+  either what the toolchain provides or small series implementations.
+
+**What it is for.** Deriving constants (filter coefficients, fixed
+kinematic transforms, gain matrices computed from fixed parameters),
+constant-initialising nodes that hold matrices, and compile-time tests of
+blocks built from the listed operations.
+
+**What it is not for.** Iterative decompositions (eigenvalues, singular
+values), dynamic sizes, or anything large. A block that needs those stays
+a run-time block, and the items above simply do not apply to it.
+
+**Risks.**
+
+- Two code paths for the same operation can disagree. Each operation has
+  a test that runs both paths on the same inputs and compares within the
+  numerical tolerance; they are never compared for equality.
+- Scope creep towards a general library. The operation list is fixed in
+  the plan and extended only when a concrete block needs it.
+- Compile time for larger matrices. Sizes are limited to what control and
+  estimation blocks actually use.
+
 ## Limits and costs
 
 - **Compile time and compiler memory.** Constant evaluation is an
@@ -154,11 +224,11 @@ built as constant strings that name the offending member.
   deployment, algorithms work on flat index arrays, and compile time is a
   tracked benchmark from stage S0. A deployment that hits the limits
   raises them deliberately in its own build settings.
-- **Not everything is `constexpr`.** Eigen is largely not usable in
-  constant expressions, so blocks built on it cannot be evaluated at
-  compile time and nodes holding its types may not be
-  constant-initialisable. Items 1 and 8 apply to the blocks that qualify
-  and degrade per node, not per deployment.
+- **Not everything is `constexpr`.** Eigen supports little beyond
+  declaring constant fixed-size matrices in constant expressions. Blocks
+  that stay within the compile-time subset above qualify for items 1, 4
+  and 8; the rest do not, and the features degrade per node, not per
+  deployment.
 - **Mathematical functions.** Coefficient calculations need functions
   such as `sin`, `exp` and `sqrt` in constant expressions. C++26 makes
   more of `<cmath>` `constexpr`, and GCC folds many of these as built-ins,
@@ -188,3 +258,8 @@ Recorded as M22 in `questions.md`.
   anywhere for existing ports?
 - Are execution-time budgets known for existing components, so that the
   budget check would have real numbers to work with?
+- Which matrix operations do the estimation and control blocks use
+  where their inputs are fixed at build time? That sets the operation
+  list of the compile-time matrix type.
+- Which Eigen version is pinned? Its own `constexpr` support differs by
+  release.
