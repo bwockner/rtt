@@ -25,8 +25,9 @@ tried on a real compiler; stage S1 exists to do that first.
 | [deployment.md](deployment.md) | Deployment as a struct, the per-thread fold, same-thread links, slots, substitutable links | S8, S9 |
 | [operations-and-properties.md](operations-and-properties.md) | Annotated operations and properties, typed callers | S10 |
 | [runtime-layer.md](runtime-layer.md) | Machine files, graph model, inspection, port observation, UDP bridge, loading | S11 |
+| [compile-time.md](compile-time.md) | What is computed or checked during compilation, further opportunities, limits | S1, S8, all |
 | [numerics.md](numerics.md) | SIMD, alignment, floating-point state, Eigen, comparing with the simulator | S4, S6, S7 |
-| [questions.md](questions.md) | Open design questions M1 to M21 | - |
+| [questions.md](questions.md) | Open design questions M1 to M22 | - |
 
 Related documents outside this directory:
 [../open-questions.md](../open-questions.md) (all open points in priority

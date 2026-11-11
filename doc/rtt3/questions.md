@@ -2,7 +2,7 @@
 
 Part of the `rtt3` plan; see [README.md](README.md) for the index, the stages and how they depend on each other.
 
-The numbers are stable identifiers, written M1 to M21 elsewhere. A
+The numbers are stable identifiers, written M1 to M22 elsewhere. A
 consolidated and prioritised list covering all plans is in
 [../open-questions.md](../open-questions.md).
 
@@ -102,3 +102,7 @@ consolidated and prioritised list covering all plans is in
     links can be register-passed? Which components genuinely need the
     port-member style? For very large single-thread graphs, is inlining
     the whole step acceptable, or should code size be bounded per thread?
+22. **Compile-time evaluation**: are there parameters that are the same
+    on every machine and worth fixing at build time? Is unit checking on
+    links wanted? Are execution-time budgets known for existing
+    components? See `compile-time.md`.

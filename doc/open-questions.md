@@ -93,6 +93,10 @@ first.
   of inputs returning outputs, so same-thread links are register-passed,
   and which components need port members? Should inlining be bounded for
   very large single-thread graphs? [M21]
+- **Compile-time evaluation**: which parameters are the same on every
+  machine and could be fixed at build time? Is unit checking on links
+  wanted? Are execution-time budgets known for existing components? See
+  `rtt3/compile-time.md`. [M22]
 - **Inter-process transport**: any transport in scope beyond the UDP
   bridge, or single-process with bridges as components? [M4]
 - **ABI stability** for separately built component libraries. [M8]
