@@ -1087,13 +1087,12 @@ the estimator removes the vibration but makes the remaining noise
 coloured and adds delay, both of which the filter then has to be told
 about. It is a fallback, not a substitute for the first two.
 
-**Recommendation.** Start with level 1 for every gyroscope, with the
-geometry factor identified from recorded data per sensor (the spectrum
-of each gyroscope during representative motion gives modal frequency and
-amplitude directly) and the length scaling used as a prior and a
-cross-check. Add level 2 for the links where the modal frequency is
-close to the bandwidth needed for the joint estimates, or where the
-vibration itself must be controlled.
+**Decided default.** With one inertial unit per link and no model of the
+structure or its mode shapes, the general rule is that a sensor is
+trusted less the further it is from the joint in question. The next
+subsection turns that rule into a noise model. Modal states (level 2)
+are not part of the default and are added only where a specific link
+demands it.
 
 **Consequences elsewhere.**
 
@@ -1112,6 +1111,106 @@ vibration itself must be controlled.
 - *Accelerometers* are affected through the deflection itself, not only
   its slope, and through the lever arm; the same modal states serve both
   sensor types.
+
+### The default rule: trust falls with distance along the chain
+
+**The difficulty with stating it naively.** A Kalman filter gives each
+sensor one covariance. "Trust this sensor less for distant joints and
+more for near ones" is a statement about pairs of sensor and joint, and
+a single number per sensor cannot express it. Simply enlarging the
+covariance of the outer sensors would also make each outer joint
+distrust the unit on its own link, which is the best information it has.
+
+**A disturbance that accumulates along the chain.** The rule follows
+exactly from one modelling assumption, with no structural model: every
+link adds its own independent disturbance to the angular velocity seen
+from that link onward. The reading of the unit on link i is then
+
+    z_i = (rigid-body rate of link i) + w_1 + w_2 + ... + w_i + n_i
+
+where `w_j` is the disturbance contributed by link j (vibration,
+compliance, small misalignment) and `n_i` is the unit's own noise. The
+disturbances of different links are independent; the sum is what a
+sensor further out inherits from everything before it.
+
+What this single assumption produces:
+
+- *Near sensors are trusted for near joints.* The difference between the
+  readings on links i and i-1 contains hinge i's rate and only `w_i`
+  plus the two sensor noises. Everything accumulated upstream is common
+  to both and cancels. So each joint is informed precisely by the units
+  on either side of it, however far out on the chain it is.
+- *Distant sensors are trusted little for joints near the root.* Seen
+  from link i, the root's motion is buried under `w_1 + ... + w_i`. The
+  further out the sensor, the larger that sum. A distant sensor still
+  contributes, but mostly by averaging down the sensor noise of the
+  nearer ones, never by overruling them.
+- *The weighting is per sensor and joint pair,* as the rule requires,
+  and it is derived, not assigned: it is what optimal estimation gives
+  under this noise model.
+
+Formally, the noise of the stacked readings is not diagonal. The
+covariance between sensors a and b is the sum of the link disturbances
+up to the nearer of the two, plus the sensor noise on the diagonal. That
+structure, the same as a random walk indexed by position along the
+chain, is the whole rule.
+
+**The one parameter per link.** Each link needs the variance of its own
+contribution `w_j`. Without a structural model it is given by a simple
+law and one constant fitted to data:
+
+- proportional to a power of the link's length, linear or quadratic,
+  chosen by which fits the recordings better;
+- larger on the out-of-plane axes than in plane, so it is a diagonal
+  matrix per link in the link's frame, not a scalar;
+- multiplied by the current excitation level, as in level 1 above, which
+  is what makes the sensor covariance vary at run time.
+
+So the tuning burden is a constant per axis class and the choice of
+exponent, not a schedule per sensor.
+
+**How the update is computed.** Two equivalent ways, both small:
+
+- *One block update for all gyroscopes.* With five or six units there
+  are fifteen to eighteen gyroscope axes. Their innovation covariance,
+  with the accumulated noise structure, is factorised once per step by
+  Cholesky. Against a reduced state of about ten this is cheap, and it
+  is exact. A unit that is missing or rejected has its rows left out.
+- *Sequential, from the root outward, on differences.* Each unit's
+  reading is taken relative to the previous unit's, rotated into its
+  frame. The noise of these differences is nearly independent from link
+  to link, so they can be processed one link at a time. The sensor noise
+  of each unit appears in two consecutive differences; that correlation
+  is neglected when vibration dominates sensor noise, or handled by
+  processing two neighbouring units as one small block.
+
+The block form is the default because it is exact and the sizes allow
+it.
+
+**Why not just inflate each sensor's own covariance with distance.**
+That treats the accumulated disturbance as independent between sensors.
+It gets the root right but is needlessly pessimistic for the outer
+joints, because it throws away the cancellation between neighbouring
+units that makes each hinge well observed. It is acceptable only as a
+crude first step.
+
+**Limits of the rule.**
+
+- It treats link disturbances as white in time. Vibration is
+  oscillatory, so this holds when the estimator's bandwidth is well
+  below the vibration frequencies, and is optimistic otherwise. That is
+  the point at which modal states become necessary for a link.
+- It assumes the disturbance of each link is independent of the others.
+  A shock that excites the whole structure at once violates that
+  briefly; the excitation scaling covers it by raising all the variances
+  together.
+- Accelerometers need the same accumulated term plus their lever-arm
+  terms.
+
+**If the unit nearest a joint fails.** The next unit out takes over
+automatically, with the additional link's disturbance included in its
+uncertainty. No reconfiguration is needed, and the larger covariance of
+the affected joint is visible to whatever consumes the estimate.
 
 ### Applied to the case at hand: an EKF with per-sensor varying covariance
 
@@ -1338,11 +1437,13 @@ a build with every fast-math option on.
   dynamics depend on another's? Are there bias or other vector states in
   addition?
 - What is the filter's rate and its share of the cycle time today?
-- Out-of-plane vibration scales with link length (stated by the owner).
-  What are the link lengths, where along each link are the gyroscopes,
-  and what are the lowest out-of-plane modal frequencies compared with
-  the bandwidth needed for the joint estimates? Is the present varying
-  covariance driven by this vibration, and how is it computed today?
+- There is one inertial unit per link, and the default rule is that
+  trust falls with distance along the chain, without modelling mode
+  shapes (decided). What are the link lengths and the lowest
+  out-of-plane vibration frequencies compared with the bandwidth needed
+  for the joint estimates? How is the varying covariance computed
+  today? Are recordings available to fit the per-link disturbance
+  constant?
 - What are the mechanical tolerances or calibration accuracies of hinge
   axes and sensor mountings, and are misalignments calibrated today?
   How fast do the links rotate? Those set the distance-dependent term.
