@@ -131,7 +131,9 @@ first.
   the tape, plumb-bob and total-station observations: which reference
   points exist, what the instrument outputs, and how many static poses.
   For validation: which quantity defines accuracy and what the
-  specification is. See
+  specification is. For calibration without a total station: what
+  equipment can be assumed in the field and which parameters change
+  there. See
   `rtt3/estimation.md`. [M24]
 - **Generated kinematics**: SymForce is planned for closed-form
   kinematics. Which version, is generated code checked in or regenerated,

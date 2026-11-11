@@ -2012,6 +2012,97 @@ instrument set-ups and the result are stored together as one calibration
 record per machine, so that a calibration can be reproduced, extended
 with later observations, or re-solved when the model changes.
 
+**Tracking total station: lock and latency.** The owner's instrument can
+track a prism, single or multiple prisms can be fitted, and the time it
+takes to lock on is a problem. Consequences for how it is used:
+
+- *Two different delays.* Acquisition time, the seconds it takes to find
+  and lock a prism after pointing at a new one or after losing it,
+  limits how many observations fit in a session and rules out switching
+  prisms during motion. Measurement latency, the delay between the
+  instant a tracked position is valid and the time stamp it arrives
+  with, corrupts dynamic data: the error is the target's speed times the
+  delay, several centimetres at a metre per second for a delay of some
+  tens of milliseconds. Tracking instruments also commonly take the
+  angles and the distance at slightly different instants, which adds an
+  error of the same kind.
+- *Latency is a calibration parameter.* As for the inertial units, the
+  instrument's time offset is estimated from motion, with separate
+  offsets for angles and distance if the data shows the need. Until it
+  is known, dynamic validation uses slow motion or stop-and-go.
+- *Lock status is data.* Samples taken while the instrument is searching
+  or has just re-acquired are marked invalid from the instrument's own
+  status and not used. A static observation requires the pose to be held
+  longer than the acquisition time.
+- *Order the observations to avoid re-acquisition.* The session plan
+  sequences poses and prisms so that the instrument turns as little as
+  possible between observations and line of sight is never lost in
+  between.
+- *Several prisms.* Three prisms on one link give that link's full pose,
+  but one instrument observes them one after another, so this is a
+  static-pose technique. With several prisms in view the instrument may
+  lock onto the wrong one. Each observation is therefore checked against
+  the position predicted for every candidate prism and assigned to the
+  one it fits; an observation that fits none, or two equally, is
+  rejected.
+
+**Calibration without a total station.** A stated goal is field
+calibration that does not need the instrument, to make it cheaper. The
+approach is two tiers that share one model.
+
+*Reference calibration, with the instrument.* Done once per machine or
+per machine type, at the factory or depot. It determines everything,
+including the parameters that field methods cannot see, and yields their
+uncertainties.
+
+*Field calibration, without it.* Re-determines only the parameters that
+change in the field (a replaced sensor, a re-mounted unit, a changed
+tool, wear) and treats the rest as considered parameters carrying the
+uncertainty from the reference calibration. Its observations:
+
+- *Self-calibration from motion, needing no equipment.*
+  - Moving one joint at a time: the axis about which a link's gyroscope
+    sees rotation is that hinge's axis expressed in the sensor's frame,
+    which gives the unit's mounting orientation about two axes.
+  - Static poses: the accelerometers give gravity in each sensor frame,
+    which with the hinge axis completes the mounting orientation, and
+    the gyroscopes give their biases.
+  - Slewing the base with GNSS running: the antenna traces a circle,
+    which locates the slew axis and the antenna's lever arm from it.
+  - Time offsets from any sufficiently lively motion.
+- *Scale, which motion cannot supply.* Inertial data does not determine
+  lengths, so at least one external length is needed: the tape between
+  reference points, or the repeated touch of the tool point on a fixed
+  mark, or on a mark whose position is known.
+- *Low-cost absolute references.* A GNSS rover placed on reference
+  points or at the tool point is a position observation like the total
+  station's with a larger uncertainty, in a frame that is already the
+  machine's. A laser level or a string line constrains points to a known
+  plane or line. The plumb bob and a digital level tie links to gravity.
+
+*Whether it is good enough is computed before it is tried.* For a
+proposed field procedure, the curvature analysis gives the covariance of
+every parameter it leaves, and the error prediction of the previous
+paragraphs turns that into expected tool-point accuracy over the
+workspace. That number, compared with the specification, says whether
+the instrument can be dispensed with, and which additional cheap
+observation would help most if not.
+
+*Validating without the instrument.* Independent checks that remain
+available: touching marks that were not used in the fit; tape
+measurements between points that were not used; a GNSS rover at the tool
+point; tracing a surface known to be flat or level. These are weaker
+than an independent three-dimensional reference, and that should be
+stated with the result. The fit's own residual statistics are a
+necessary check but not a validation.
+
+*Establishing trust in the field procedure.* The instrument is the means
+of proving that it is not needed. On a few machines, both calibrations
+are done and compared: the field result should agree with the reference
+within the uncertainty the field procedure reports. Once that holds
+across machines and repeated trials, the reported uncertainty of the
+field procedure can be relied on without the instrument present.
+
 **Choosing validation poses: where the predicted error is largest.** A
 calibration is validated by an independent measurement, typically the
 total station on the tool point, in poses that were not used for
@@ -2252,9 +2343,14 @@ properties already have (`compile-time.md`).
   tied to the GNSS frame by control points? Is the machine held static
   for each observation, and in how many poses? Is the repeated-touch
   observation (a tool point on a fixed mark) practical on this machine?
-- For validation: which quantity defines accuracy (tool point position,
-  an angle, a depth), what is the specification, and can the total
-  station track a prism during motion?
+- The total station can track, single and multiple prisms are
+  possible, lock-on time is a problem, and calibration without the
+  instrument is a goal (stated by the owner). Which quantity defines
+  accuracy (tool point position, an angle, a depth) and what is the
+  specification? What equipment can be assumed in the field (tape, GNSS
+  rover, laser level)? Which parameters are expected to change in the
+  field? Does the instrument report lock status and time stamps for its
+  measurements?
 - For identification and calibration: are commands recorded on the same
   time base as the sensors? What is measured on the actuator side of
   each joint (encoder, cylinder position, pressure)? Which parameters
