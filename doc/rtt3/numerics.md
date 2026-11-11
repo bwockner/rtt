@@ -1483,6 +1483,125 @@ disturbance accumulated between it and the base, and a cascade that
 estimated the base from its own sensors alone would ignore all but one
 of them.
 
+### A truncated factor graph in place of a pure EKF
+
+**Direction from the owner:** the estimator is to be a truncated factor
+graph, that is, a fixed-lag smoother, not a pure extended Kalman filter.
+The statements below about how such estimators and the tools for them
+behave are from general knowledge and were not checked for this plan.
+
+**What it is.** The estimator keeps the states of the last N time steps
+(the window) as unknowns. Every measurement and every piece of the
+motion model is a factor that ties together the states it involves. Each
+cycle, the newest state and its factors are added, the whole window is
+re-solved as a non-linear least-squares problem, and the oldest state is
+removed by marginalisation, which leaves behind a prior on the oldest
+state that remains. "Truncated" refers to that removal: the history
+beyond the window survives only as that prior.
+
+A window of one state solved with one iteration is the EKF. The
+factor-graph form is therefore a generalisation, not a different
+estimator, and the EKF remains available as the smallest configuration.
+
+**What it gains for this problem.**
+
+- *Late measurements need no special machinery.* A GNSS fix that arrives
+  a hundred milliseconds late is attached to the state at the time it
+  was valid, which is still in the window. The history buffer and
+  re-propagation described under "GNSS" are replaced by the window
+  itself, provided the window is longer than the largest latency.
+- *Re-linearisation.* States on Lie groups, an inclination measurement
+  through gravity, and a lever arm through several joints are all
+  strongly non-linear. Within the window every factor is re-linearised
+  at the current best estimate on each solve. The question of whether to
+  re-linearise between sensors, and the order dependence that came with
+  it, disappears.
+- *Outliers.* A robust loss on GNSS factors down-weights multipath
+  without a hard accept-or-reject gate, and a measurement that looked
+  wrong when it arrived can regain weight once later data supports it.
+- *Slowly varying errors.* Sensor biases and the GNSS offset are
+  estimated over the whole window instead of from one step to the next,
+  which separates them better from real motion.
+- *A natural consistency measure.* Each factor's weighted residual after
+  the solve is the generalisation of the parity residual: it says how
+  well that sensor agrees with everything else in the window.
+
+**What carries over unchanged.** Everything about the model:
+
+- the reduction to the true degrees of freedom. The unknowns per time
+  step are the reduced coordinates, rates and biases, not a pose per
+  link;
+- the generated measurement functions and their Jacobians. A factor is a
+  residual function and its derivative, which is what the symbolic
+  generator produces;
+- the noise model: per-sensor varying covariance, the disturbance that
+  accumulates along the chain with its measured coherence (one joint
+  factor per time step for all inertial units, whitened by a factor of
+  its covariance), the consider parameters for imperfect geometry, and
+  the treatment of correlated samples.
+
+**What it costs and how to keep it real-time safe.**
+
+- *Arithmetic.* Factors connect only states that are adjacent in time,
+  so the normal equations are block tridiagonal. Solving them costs the
+  window length times the cube of the per-step state size, not the cube
+  of the whole. With about fifty states per step and a window of twenty,
+  one iteration is a few million operations; at 100 Hz that is well
+  within the target's capacity.
+- *Fixed structure.* The set of factors per step is fixed by the sensor
+  layout. The sparsity pattern is then known at build time and the
+  solver is a block-tridiagonal Cholesky over fixed-size blocks in
+  fixed-size arrays, with no allocation and a fixed operation count. A
+  missing measurement is a factor with zero weight, not a change of
+  structure.
+- *Fixed iteration count.* One or two Gauss-Newton iterations per cycle,
+  warm-started from the previous solution. Stopping on a convergence
+  test would make the time data dependent. An iteration budget that is
+  not enough is reported, and the partial result is still a valid
+  improvement.
+- *General-purpose smoothing libraries are not suitable as they are.*
+  Incremental solvers re-order and re-eliminate variable amounts of the
+  problem per step and allocate as they go, which gives variable timing.
+  The planned symbolic generator ships its own optimiser aimed at
+  fixed-structure problems, which may fit; whether it is allocation-free
+  and bounded in the sense required here has to be checked. The
+  fallback, a hand-written block-tridiagonal solver, is small.
+- *Marginalisation.* The prior left by a removed state is a linearised
+  factor. The variables it involves must keep the linearisation point
+  they had at that moment, or the estimator becomes overconfident. This
+  is a known subtlety and has a standard remedy; it needs a test of its
+  own.
+- *Covariance of the current state* comes out of the factorisation of
+  the last block at no extra cost, so consumers that want uncertainty
+  still get it.
+
+**Choosing the window.** Long enough to contain the largest measurement
+latency and a few correlation times of the slow errors; no longer,
+because cost is proportional to it. Not every 100 Hz sample needs its
+own state: inertial data between two states can be combined into one
+factor, so that states are kept at, say, 10 to 20 Hz and a window of
+twenty covers one to two seconds.
+
+**Where it runs.** Two arrangements are compatible with the framework:
+
+- in the real-time thread at the inertial rate, if the worst-case solve
+  time fits the cycle with margin. The bounded formulation above is what
+  makes that a question of measurement rather than hope;
+- or as a separate node at lower priority, with the real-time thread
+  running a light predictor that propagates the most recent smoothed
+  state to the present. The link between them is a latest-value channel.
+  This decouples the controller's timing from the solver completely, at
+  the cost of the correction arriving one solve later.
+
+The second is the safer starting point; the first can follow once the
+solve time has been measured on the target.
+
+**Testing.** With the window set to one and a single iteration the
+estimator must reproduce a reference EKF within tolerance, which gives a
+fixed point to test against. Larger windows are then judged on recorded
+data and in simulation by estimation error and consistency, and on the
+target by worst-case solve time.
+
 ### Applied to the case at hand: an EKF with per-sensor varying covariance
 
 The filter in question is an extended Kalman filter in which each
@@ -1720,6 +1839,12 @@ a build with every fast-math option on.
     estimated?
   - At what rate does the control loop that consumes the estimate run?
   - Do recordings with all units and GNSS logged together exist?
+- The estimator is to be a truncated factor graph (stated by the
+  owner). How long a window is intended, and is it set by GNSS latency
+  or by something else? Should the solve run in the real-time thread or
+  beside it? Is the symbolic generator's own optimiser intended as the
+  solver? Is a smoothed, delayed estimate also wanted, or only the
+  current one?
 - There is one inertial unit per link, and the default rule is that
   trust falls with distance along the chain, without modelling mode
   shapes (decided). What are the link lengths and the lowest

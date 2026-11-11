@@ -107,27 +107,11 @@ first.
   used, and the state magnitudes, required
   resolutions and run length that decide whether a mixed-precision
   factored form is safe. See `rtt3/numerics.md`.
-- **Filter architecture**: is the existing estimator one filter or a
-  cascade, and if a cascade, why? The plan recommends one reduced joint
-  filter. See `rtt3/numerics.md`.
-- **Link vibration**: decided that, with one inertial unit per link and
-  no structural model, sensors are trusted less with distance along the
-  chain, through a disturbance that accumulates link by link. Still
-  open: link lengths, lowest out-of-plane vibration frequencies against
-  the estimator's bandwidth, how the varying covariance is computed
-  today, and whether recordings exist to fit the per-link constant. See
-  `rtt3/numerics.md`.
-- **Sensor set**: one inertial unit per link at about 100 Hz, plus GNSS.
-  Still open: whether the base moves; GNSS antenna position, number of
-  antennas, solution type, rate and latency; how the inertial units
-  report, their low-pass setting and time stamping; whether
-  accelerometers are used for inclination and biases are estimated; the
-  control loop's rate; whether synchronised recordings exist. See
-  `rtt3/numerics.md`.
-- **Imperfect geometry**: tolerances or calibration accuracy of hinge
-  axes and sensor mountings, rotation rates, and whether compliance is
-  significant. These set how much less a distant sensor is trusted. See
-  `rtt3/numerics.md`.
+- **Estimator architecture**: a truncated factor graph (fixed-lag
+  smoother) over the reduced state, not a pure EKF and not a cascade.
+  Still open: window length and what sets it, whether the solve runs in
+  the real-time thread or beside it, which solver, and whether a delayed
+  smoothed output is wanted. See `rtt3/numerics.md`.
 - **Unexplained sensor motion**: when a gyroscope reports rotation the
   mechanism model cannot produce, should the system warn, model an extra
   freedom, or switch from the planar to the full model? Where are the
