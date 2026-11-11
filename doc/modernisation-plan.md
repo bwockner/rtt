@@ -502,6 +502,102 @@ Two limits of the language as it stands:
   spike. The fallback is a `rtt3::arg("axis", "Axis index")` annotation on
   the function.
 
+#### Wrapping C functions as components
+
+A large share of control code already exists as C functions: hand-written
+libraries, vendor drivers, and code generated from models. Writing a
+component around each one by hand is pure boilerplate (a port per
+argument, copy in, call, copy out). `rtt3` generates that component from
+the function's declaration.
+
+```cpp
+extern "C" {
+#include "pid.h"
+// int  pid_init(pid_state* s, const pid_gains* gains);
+// double pid_step(pid_state* s, double setpoint, double measured);
+}
+
+struct App {
+    [[=rtt3::periodic(1ms), =rtt3::priority(79)]]
+    rtt3::function_node<^^pid_step,
+                        rtt3::state<"s">,                    // kept inside the node
+                        rtt3::init<^^pid_init>> pid;         // called from configure
+
+    static constexpr auto links = rtt3::links(
+        rtt3::link(&App::planner, &Planner::target,   &App::pid,   rtt3::port<"setpoint">),
+        rtt3::link(&App::sensor,  &Sensor::position,  &App::pid,   rtt3::port<"measured">),
+        rtt3::link(&App::pid,     rtt3::port<"result">, &App::drive, &Drive::torque));
+};
+```
+
+The function is passed as a reflection, so its parameter names and types
+are available. From them the node gets, with no further code:
+
+| In the C declaration | Becomes |
+|---|---|
+| Parameter passed by value, or `const T*` to one object | Input port named after the parameter, holding the latest value |
+| Non-void return value | Output port `result` (name can be overridden) |
+| `T*` to one object, non-const | Ambiguous in C, so it must be classified: `rtt3::out<"name">`, `rtt3::inout<"name">` or `rtt3::state<"name">` |
+| Pointer plus length pair | `rtt3::array<"ptr", "len">`, mapped to a bounded array port |
+| Parameter that is configuration, not signal | `rtt3::property<"name">`: a property instead of a port |
+| Integer status return | `rtt3::status<0>`: the given value means success, anything else puts the node in its error state; no `result` port is created |
+| Companion functions | `rtt3::init<^^f>` and `rtt3::cleanup<^^f>`, run from the node's configure and cleanup steps with the same state object |
+
+An unclassified ambiguous parameter is a compile error that names the
+parameter and lists the choices. C headers cannot carry annotations, which
+is why the hints are given where the function is wrapped and not on its
+declaration.
+
+**Struct-in, struct-out functions.** Generated code often takes one
+struct of inputs and one of outputs. `rtt3::unpack<"u">` turns each member
+of that struct into its own port (by reflection on the struct), so the
+rest of the system connects to individual signals. The node assembles the
+struct from the latest value of each port before the call. This is the one
+place where several inputs are joined into one composite automatically,
+and the meaning is fixed: the latest values at the node's activation.
+
+**Functions that work on global variables.** Some generators emit a step
+function with no arguments and global input, output and parameter
+structs. These are wrapped by naming the globals:
+
+```cpp
+rtt3::function_node<^^model_step,
+                    rtt3::inputs<^^model_U>, rtt3::outputs<^^model_Y>,
+                    rtt3::properties<^^model_P>,
+                    rtt3::init<^^model_initialize>, rtt3::cleanup<^^model_terminate>> model;
+```
+
+Such a node is a singleton. Declaring it twice in a deployment is a
+compile error, since both instances would share the same globals.
+
+**When it runs.** By default the node runs every activation of its thread
+on the latest input values. `rtt3::when_all_fresh` runs it only when every
+input has a new sample since the last run, and `rtt3::when_any_fresh` when
+at least one has.
+
+**What the result is.** An ordinary node: it appears in the graph with its
+ports, can be folded into a thread with its neighbours, can sit in a slot,
+and its links can be substituted for simulation. The call is direct and
+inlinable, so the wrapper costs the copies of the arguments and nothing
+else. The same mechanism accepts C++ free functions and function objects.
+
+**Limits.**
+
+- Parameter names come from the declaration, so the header must name its
+  parameters; unnamed ones are addressed by position (`rtt3::port<0>`).
+- Argument and return types must be port data (4.4). Plain C structs
+  qualify without further work.
+- Variadic functions and functions taking callbacks are not wrapped.
+- The library cannot know whether a C function is safe for real-time use
+  or whether it is reentrant. A function with hidden static state must be
+  declared `rtt3::singleton` by the person wrapping it; allocation and
+  system calls inside it are caught by the allocation guard and system
+  call filter in tests (4.9), not at compile time.
+- A function that can block or is slow belongs in its own thread, like
+  any other driver.
+- Reflecting declarations from C headers is expected to work on GCC 16
+  but is one of the items for the phase 0 spike.
+
 #### Data types: composition, inheritance and link adaptors
 
 RTT 2.x requires the two ports of a connection to have exactly the same
@@ -1478,3 +1574,8 @@ on questions 2 and 3; phase 6 on questions 1, 4 and 10.
     your own components, or mainly from the deployer, scripts and tools?
     Do you change properties while components are running? Do you use
     attributes or constants separately from properties?
+19. **C code to wrap**: what kind of C functions do you have in mind
+    (generated from models such as Simulink, vendor driver libraries,
+    hand-written algorithms)? Do they keep state in a struct passed by
+    pointer, in globals, or not at all? That decides which of the mapping
+    rules in 4.4 need to be in the first version.
