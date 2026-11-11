@@ -323,7 +323,7 @@ the first version. They remain a documented option for hand-written
 blocks and for compositions that happen outside generated code, to be
 taken up only if profiling shows such a place. One concrete use has since
 appeared: a covariance of the form `B P_q Bᵀ` for a mechanism with few
-degrees of freedom (`numerics.md`, "Automatic reduction when the true
+degrees of freedom (`estimation.md`, "Automatic reduction when the true
 degrees of freedom are few").
 
 ## Limits and costs

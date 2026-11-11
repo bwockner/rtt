@@ -106,22 +106,29 @@ first.
   loops, which error convention is
   used, and the state magnitudes, required
   resolutions and run length that decide whether a mixed-precision
-  factored form is safe. See `rtt3/numerics.md`.
+  factored form is safe. See `rtt3/estimation.md`.
 - **Estimator architecture**: a truncated factor graph (fixed-lag
   smoother) over the reduced state, not a pure EKF and not a cascade.
   Still open: window length and what sets it, whether the solve runs in
   the real-time thread or beside it, which solver, whether a delayed
   smoothed output is wanted, the grid spacing, and whether biases are
-  per grid state or shared across the window. See `rtt3/numerics.md`.
+  per grid state or shared across the window. See `rtt3/estimation.md`.
 - **Observability indicator**: the curvature of the residual along a
   direction is the measure of how well it is observed. Still open: which
   directions are weak in practice, what consumers should do while one is
   flagged, and whether the threshold is fixed or adaptive. See
-  `rtt3/numerics.md`.
+  `rtt3/estimation.md`.
 - **Unexplained sensor motion**: when a gyroscope reports rotation the
   mechanism model cannot produce, should the system warn, model an extra
   freedom, or switch from the planar to the full model? Where are the
-  sensors mounted and is the base fixed? See `rtt3/numerics.md`.
+  sensors mounted and is the base fixed? See `rtt3/estimation.md`.
+- **Identification and calibration**: the estimator's factor graph is
+  also to be used for calibration (mounting offsets, intrinsics, time
+  offsets, deadband and backlash). Still open: whether commands are
+  recorded on the sensors' time base, what is measured on the actuator
+  side of each joint, which parameters should be tracked on line, and
+  whether a bench procedure for inertial intrinsics exists. See
+  `rtt3/estimation.md`. [M24]
 - **Generated kinematics**: SymForce is planned for closed-form
   kinematics. Which version, is generated code checked in or regenerated,
   which calculations stay on KDL, and what tolerance defines

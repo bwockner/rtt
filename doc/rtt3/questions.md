@@ -2,7 +2,7 @@
 
 Part of the `rtt3` plan; see [README.md](README.md) for the index, the stages and how they depend on each other.
 
-The numbers are stable identifiers, written M1 to M23 elsewhere. A
+The numbers are stable identifiers, written M1 to M24 elsewhere. A
 consolidated and prioritised list covering all plans is in
 [../open-questions.md](../open-questions.md).
 
@@ -112,3 +112,7 @@ consolidated and prioritised list covering all plans is in
     regenerated at build time? Which calculations stay on KDL? What
     tolerance defines "approximately planar" for each machine? See
     `blocks.md`.
+24. **Estimation and calibration**: the open points on the estimator
+    (state size, sensor layout and timing, window and grid, weak
+    directions, actuator-side measurements, which parameters to track)
+    are listed at the end of `estimation.md`.
