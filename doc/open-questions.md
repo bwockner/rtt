@@ -110,6 +110,11 @@ first.
 - **Filter architecture**: is the existing estimator one filter or a
   cascade, and if a cascade, why? The plan recommends one reduced joint
   filter. See `rtt3/numerics.md`.
+- **Link vibration**: link lengths, gyroscope positions along the
+  links, lowest out-of-plane modal frequencies against the estimator's
+  bandwidth, and how the varying sensor covariance is computed today.
+  These decide between a vibration noise term and modal states. See
+  `rtt3/numerics.md`.
 - **Imperfect geometry**: tolerances or calibration accuracy of hinge
   axes and sensor mountings, rotation rates, and whether compliance is
   significant. These set how much less a distant sensor is trusted. See

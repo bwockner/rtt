@@ -919,10 +919,15 @@ already in the joint filter; the rest has to be modelled, and the model
 is what makes the uncertainty grow with distance instead of a hand-tuned
 factor.
 
-"Distance" here means the number of joints and links between the sensor
-and the joint in question. For a gyroscope the metric distance does not
-matter, since all points of a rigid link share one angular velocity. For
-an accelerometer it does: see the last paragraph.
+"Distance" has two meanings here, and both matter. One is the number of
+joints and links between the sensor and the joint in question. The other
+is metric: how long the links are and where along a link the sensor
+sits. An earlier version of this section said metric distance does not
+matter for a gyroscope because all points of a rigid link share one
+angular velocity. That is true only of a rigid link. Real links bend and
+twist, their out-of-plane vibration grows with link length, and a
+gyroscope measures the local angular velocity including that vibration.
+The subsection after this one deals with it.
 
 **What the joint filter already accounts for.**
 
@@ -1013,6 +1018,100 @@ and the fact that angular acceleration is poorly known, make their
 uncertainty grow with metric distance as well as with the number of
 joints. The same consider-parameter treatment applies, with the lever
 arm as the parameter.
+
+### Flexible links: vibration that scales with link length
+
+**The effect.** A link is a beam. Its bending and torsion modes add a
+local rotation at the sensor that is not part of the rigid-body motion.
+A gyroscope reads the rate of that rotation in full. For a given
+excitation the slope at the end of a beam grows with its length (roughly
+with the square for bending, linearly for torsion) while the frequency
+of the mode falls, so longer links give larger and slower out-of-plane
+vibration. The amplitude at the sensor also depends on where along the
+link it is mounted, through the slope of the mode shape at that point:
+small near the joint, largest towards the free end. Vibration of one
+link also shakes everything attached beyond it, so the effect
+accumulates along the chain as well.
+
+**Why it must be modelled and not just tolerated.** Out-of-plane
+vibration at a distal gyroscope is exactly the kind of signal that the
+joint filter would otherwise attribute to an out-of-plane freedom nearer
+the root. It differs from true joint motion in two ways the filter can
+use: it is oscillatory with zero mean, concentrated near the modal
+frequencies, and its size is predictable from link length, sensor
+position and how hard the mechanism is being driven.
+
+**Three levels of treatment**, in increasing cost.
+
+*1. Per-sensor, per-axis noise that depends on geometry and excitation.*
+The gyroscope's measurement covariance gets a vibration term in addition
+to the sensor's own noise:
+
+- anisotropic: larger on the axes in which the link is most compliant,
+  normally the out-of-plane ones, so the covariance is a matrix per
+  sensor and not a single number;
+- scaled by a geometry factor for that sensor, a function of link
+  length and mounting position, which belongs in the symbolic model as a
+  parameter of the sensor;
+- scaled by the current excitation: commanded acceleration or jerk, or
+  the measured high-frequency content of the gyroscope signal itself.
+
+This is the varying per-sensor covariance that the estimator is already
+built around, given a physical law instead of a tuned schedule. It is
+cheap and it reduces the gain from a vibrating distal sensor onto
+distant joints. Its weakness is that it treats a narrow-band oscillation
+as white noise. That is acceptable when the filter's bandwidth for the
+joint states is well below the modal frequency, so the oscillation
+averages out; it is optimistic when the two are close.
+
+*2. Modal states.* Each significant mode of a link becomes two states, a
+modal coordinate and its rate, with a natural frequency and damping,
+driven by process noise and by the joint accelerations. A gyroscope on
+that link measures the rigid-body rate plus the modal rate times the
+mode-shape slope at its position.
+
+- Metric distance enters through that slope, per sensor. Two gyroscopes
+  on the same link see the same mode with different gains, which lets
+  the filter separate vibration from rigid motion instead of merely
+  discounting both.
+- The out-of-plane oscillation is then explained by the modal state and
+  not offered to the root joint at all.
+- Cost is two states per modelled mode. With a first out-of-plane bending
+  mode on each of the long links, that is a handful of states added to
+  the reduced filter, not a return to 6n.
+- The modal frequencies shift with payload and configuration, so they
+  are parameters that may need scheduling or slow adaptation.
+
+*3. Pre-filtering.* A notch or low-pass on the gyroscope signal before
+the estimator removes the vibration but makes the remaining noise
+coloured and adds delay, both of which the filter then has to be told
+about. It is a fallback, not a substitute for the first two.
+
+**Recommendation.** Start with level 1 for every gyroscope, with the
+geometry factor identified from recorded data per sensor (the spectrum
+of each gyroscope during representative motion gives modal frequency and
+amplitude directly) and the length scaling used as a prior and a
+cross-check. Add level 2 for the links where the modal frequency is
+close to the bandwidth needed for the joint estimates, or where the
+vibration itself must be controlled.
+
+**Consequences elsewhere.**
+
+- *Parity residual and the planar monitor.* Out-of-plane vibration is
+  unexplained motion to a rigid planar model, so the planar-validity
+  monitor would trip on it. The residual is therefore split by
+  frequency: the slowly varying part indicates a real departure from
+  planar motion; the part near the modal frequencies is a vibration
+  measure, compared against the level expected from the excitation. The
+  second is a useful output in its own right, for condition monitoring.
+- *Misalignment and vibration combine.* The consider-parameter term of
+  the previous subsection and the vibration term both enlarge the
+  innovation covariance of a distal sensor; one grows with the number of
+  joints and the rotation rate, the other with link length and
+  excitation.
+- *Accelerometers* are affected through the deflection itself, not only
+  its slope, and through the lever arm; the same modal states serve both
+  sensor types.
 
 ### Applied to the case at hand: an EKF with per-sensor varying covariance
 
@@ -1239,6 +1338,11 @@ a build with every fast-math option on.
   dynamics depend on another's? Are there bias or other vector states in
   addition?
 - What is the filter's rate and its share of the cycle time today?
+- Out-of-plane vibration scales with link length (stated by the owner).
+  What are the link lengths, where along each link are the gyroscopes,
+  and what are the lowest out-of-plane modal frequencies compared with
+  the bandwidth needed for the joint estimates? Is the present varying
+  covariance driven by this vibration, and how is it computed today?
 - What are the mechanical tolerances or calibration accuracies of hinge
   axes and sensor mountings, and are misalignments calibrated today?
   How fast do the links rotate? Those set the distance-dependent term.
