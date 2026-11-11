@@ -1777,6 +1777,100 @@ in simulation, with and without first-estimate Jacobians, show whether
 spurious information is being gained, particularly in heading during
 stationary periods.
 
+### Higher-order derivatives for the poorly observed dimensions
+
+Some dimensions of the state are observed weakly: heading, the base's
+roll, an out-of-plane freedom near the root, and the biases tied up with
+them. "Higher-order derivatives" can help with these in three distinct
+ways. Which of them was meant is an open point; all three are recorded
+because they do not conflict.
+
+**1. Higher time derivatives in the state and the motion prior.**
+
+So far the state holds coordinates and rates, with the prior between
+grid states saying that acceleration is unpredictable noise. Adding the
+accelerations as states, with the prior on jerk instead, changes what
+the accelerometers can do:
+
+- an accelerometer away from a joint axis measures, besides gravity, the
+  tangential term (angular acceleration times lever arm) and the
+  centripetal term (rate squared times lever arm). Without acceleration
+  in the state, the tangential term can only be approximated or treated
+  as disturbance. With it, the term is a direct measurement of a state;
+- the weak dimensions are then informed through two channels with
+  different error characteristics: gyroscopes through the rate,
+  accelerometers through the acceleration and the square of the rate.
+  The window ties the two together by integration;
+- the interpolation used for resampling becomes higher order, which
+  makes measurements placed between grid states more accurate.
+
+Costs and cautions: one more state per coordinate that gets this
+treatment, and an acceleration state that no sensor observes only adds
+noise. So it is applied selectively, to the coordinates for which a
+lever arm makes the acceleration observable, not to all of them.
+
+**2. Sensors of higher derivatives, where the lever arm works in favour.**
+
+The distance rule so far was about noise: disturbance accumulates
+outward. For accelerometers there is an opposite effect on the signal.
+For rotation about an axis near the root, the centripetal and tangential
+accelerations seen by a unit grow in proportion to its distance from
+that axis. A unit far out on the chain sees a large acceleration from a
+small out-of-plane or slewing rotation of the root, where its gyroscope
+sees only the same rate as every other unit, buried under more
+vibration.
+
+- Signal and disturbance both grow with distance, so there is a best
+  distance, not a monotonic rule. The accumulated-disturbance model
+  supplies the noise side and the generated kinematics the signal side;
+  the estimator then weights each unit correctly without a special case.
+- For the base, pre-integrating the full inertial measurement (velocity
+  and position increments, not only rotation) makes heading observable
+  whenever the machine accelerates horizontally: the direction of the
+  acceleration in the unit's frame is compared, across the window, with
+  the direction implied by successive GNSS positions. With a single
+  antenna this is the main source of heading while the machine moves,
+  and the estimator correctly reports growing heading uncertainty when
+  it does not.
+- Accelerometers respond to vibration far more strongly than gyroscopes
+  do, since acceleration grows with the square of frequency for a given
+  amplitude. The low-pass before sampling matters even more for them,
+  and their vibration term in the noise model is larger.
+
+**3. Higher-order terms of the measurement model, where uncertainty is
+large.**
+
+Linearisation is accurate when the uncertainty is small compared with
+the curvature of the model. For a dimension with a large uncertainty,
+such as heading before the first horizontal acceleration, it is not: the
+first-order model gives a biased prediction and an innovation covariance
+that is too small.
+
+- Inside the window this is mostly handled already, because every solve
+  re-linearises at the current estimate.
+- The weak point is the marginalisation prior, which is linearised once
+  and frozen. A dimension that is still very uncertain when its state
+  leaves the window is summarised badly. Two remedies: keep such a
+  dimension out of the per-step state and carry it as a variable shared
+  across the window, so that it is never frozen until it has been
+  observed; or include the second-order term for that dimension when
+  forming the prior.
+- Second derivatives of the measurement functions are available from the
+  symbolic generator. Restricted to the few weakly observed dimensions
+  they are cheap, and they give both the bias correction to the
+  predicted measurement and the extra term in its covariance.
+- For the very first fix on a dimension with no prior information at
+  all, a small set of hypotheses or sigma points over that dimension is
+  simpler and more reliable than any Taylor expansion.
+
+**Suggested use.** Apply the second reading first, since it uses data
+already being collected: pre-integrate the full inertial measurement of
+the base unit, and include the lever-arm accelerations in the model of
+the outer units. Add acceleration states (the first reading) for the
+freedoms that those terms make observable. Keep the third in reserve for
+start-up and for any dimension that the consistency statistics show to
+be overconfident.
+
 ### Applied to the case at hand: an EKF with per-sensor varying covariance
 
 The filter in question is an extended Kalman filter in which each
@@ -2014,6 +2108,10 @@ a build with every fast-math option on.
     estimated?
   - At what rate does the control loop that consumes the estimate run?
   - Do recordings with all units and GNSS logged together exist?
+- "Higher-order derivatives for low-confidence dimensions": is the
+  intent accelerations as states, exploiting accelerometer lever-arm
+  signals, second-order terms of the measurement model, or something
+  else? Which dimensions are the low-confidence ones in practice?
 - For the time grid and truncation: what grid spacing is intended, and
   do the inertial units provide integrated angle increments? Is heading
   observed directly (two antennas) or only through motion? Are sensor

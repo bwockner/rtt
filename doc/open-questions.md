@@ -113,6 +113,10 @@ first.
   the real-time thread or beside it, which solver, whether a delayed
   smoothed output is wanted, the grid spacing, and whether biases are
   per grid state or shared across the window. See `rtt3/numerics.md`.
+- **Higher-order derivatives**: which reading is intended for the weakly
+  observed dimensions (acceleration states, accelerometer lever-arm
+  signals, or second-order model terms), and which dimensions are weak
+  in practice? See `rtt3/numerics.md`.
 - **Unexplained sensor motion**: when a gyroscope reports rotation the
   mechanism model cannot produce, should the system warn, model an extra
   freedom, or switch from the planar to the full model? Where are the
