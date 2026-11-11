@@ -1926,6 +1926,92 @@ the distance between sensor and joint", now estimated: after
 calibration their uncertainty is small, and the distance-dependent term
 shrinks with it.
 
+**External observations of how frames relate.** During calibration the
+owner intends to use manual and survey measurements: a tape measure
+between known points in different frames, a plumb bob to align a link
+with gravity, and three-dimensional positions from a total station.
+These fit the graph as further factor types. They matter because they
+supply what the on-board sensors cannot: inertial units do not observe
+lengths or where a joint axis is, and GNSS observes one point. The
+external observations fix scale, tie the geometric frames of the links
+to the sensor frames, and remove the conventions that would otherwise
+have to be imposed.
+
+*Reference points.* Each link's description in the symbolic model names
+its reference points (pin centres, marked targets, the tool tip) with
+coordinates in that link's frame. A coordinate taken from drawings is a
+parameter with a prior from the manufacturing tolerance, not an exact
+value, unless it defines the frame.
+
+*Static poses.* These observations are taken with the machine at rest.
+Each is attached to a pose node, a state with no dynamics, shared by all
+observations made in that pose. While the machine is still the inertial
+units contribute strong factors of their own: the averaged accelerometer
+reading is the direction of gravity in each unit's frame, and the
+averaged gyroscope reading is its bias. A calibration data set is a
+number of static poses together with the dynamic recordings, solved as
+one problem.
+
+*The factor types.*
+
+| Observation | Residual | What it mainly determines | Things to model |
+|---|---|---|---|
+| Tape measure between a point on one frame and a point on another | Difference between the measured length and the distance between the two points computed through the kinematics. One scalar | Link lengths, pin positions, joint zero offsets (through the change of a distance with joint angle) | Accuracy of a millimetre or a few; sag, tension and temperature on long spans; which points were actually used |
+| Plumb bob alignment of a link with gravity | The angle between a named axis of the link and the vertical. Two components | The orientation of the link's geometric axis relative to gravity in that pose, and so the mounting orientation of that link's inertial unit about two axes | Accuracy of the order of a milliradian; which edge or pair of points defines the axis; that it says nothing about rotation about the vertical |
+| Total station position of a target on a link | Difference between the observed and predicted position of the target in the instrument's frame. Three components | Positions of points on links, antenna lever arm, kinematic parameters, base pose in the survey frame | The prism's offset from the named point; the pose of the instrument |
+
+Further observations of the same kind cost nothing to add, since each is
+one more residual function over the same kinematics: a digital level or
+protractor on a link; a reference point touched to a fixed mark from
+several different configurations, where the mark's position is unknown
+but the same each time; a point constrained to a known plane or line.
+The repeated-touch observation is especially useful because it needs no
+instrument and constrains the whole chain at once.
+
+*Total station specifics.*
+
+- The instrument measures two angles and a distance. Using those raw
+  quantities with their own accuracies is better than using converted
+  coordinates with an assumed equal accuracy in all directions; the
+  distance and the angles have very different error characteristics, and
+  the difference grows with range.
+- The instrument's frame is an unknown in the problem. A levelled
+  instrument has four unknowns, its position and its azimuth, because
+  its vertical is gravity. That makes each observation also a tie to
+  gravity, complementing the plumb bob.
+- Observing the GNSS antenna, or surveyed control points, with the same
+  instrument connects the survey frame to the GNSS frame.
+- If the instrument is moved during a session, each set-up is its own
+  frame, tied to the others by targets observed from more than one
+  set-up.
+
+*Human error.* Manual observations contain blunders: a wrong point, a
+misread digit, a unit slip. They are few and each carries much weight,
+so a mistake does real damage.
+
+- Every observation is entered with its stated accuracy, the names of
+  the points or axis involved, and the pose it belongs to.
+- The procedure asks for more observations than the minimum, so that
+  each is checked by the others.
+- After the solve, each observation's normalised residual is reported,
+  and the solve is repeated with each manual observation left out in
+  turn; one whose removal changes the result markedly is flagged.
+- A robust loss limits what a single bad value can do before it is
+  found.
+
+*Planning the session.* Because observability is curvature, the set of
+observations can be assessed before anyone goes to the machine: given a
+list of proposed poses and measurements, the tool reports which
+parameters would be determined and how well. It can also propose the
+next most informative observation, which keeps a session short. The same
+analysis shows which conventions still have to be imposed, if any,
+after the external observations are included.
+
+*Data handling.* The observations, the static pose recordings, the
+instrument set-ups and the result are stored together as one calibration
+record per machine, so that a calibration can be reproduced, extended
+with later observations, or re-solved when the model changes.
+
 **Sensor intrinsics.** Scale factors, axis non-orthogonality, bias as a
 function of temperature (which needs the temperature as an input), and
 the response of gyroscopes to acceleration.
@@ -2082,6 +2168,12 @@ properties already have (`compile-time.md`).
   covariance factor) is the proposed way to use 32-bit lanes. What are
   the magnitudes and required resolutions of the states, and how long
   does the filter run without a reset? Those decide whether it is safe.
+- For external calibration observations: which reference points exist
+  on each link and how well are their coordinates known? Does the total
+  station give raw angles and distance or only coordinates, and is it
+  tied to the GNSS frame by control points? Is the machine held static
+  for each observation, and in how many poses? Is the repeated-touch
+  observation (a tool point on a fixed mark) practical on this machine?
 - For identification and calibration: are commands recorded on the same
   time base as the sensors? What is measured on the actuator side of
   each joint (encoder, cylinder position, pressure)? Which parameters
