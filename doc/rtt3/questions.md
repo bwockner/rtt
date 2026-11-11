@@ -105,4 +105,5 @@ consolidated and prioritised list covering all plans is in
 22. **Compile-time evaluation**: are there parameters that are the same
     on every machine and worth fixing at build time? Is unit checking on
     links wanted? Are execution-time budgets known for existing
-    components? See `compile-time.md`.
+    components? Which matrix structures should be exploited, and can
+    the block generator simplify symbolically? See `compile-time.md`.

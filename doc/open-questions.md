@@ -95,7 +95,9 @@ first.
   very large single-thread graphs? [M21]
 - **Compile-time evaluation**: which parameters are the same on every
   machine and could be fixed at build time? Is unit checking on links
-  wanted? Are execution-time budgets known for existing components? See
+  wanted? Are execution-time budgets known for existing components?
+  Which matrix structures should be exploited, and can the block
+  generator simplify symbolically? See
   `rtt3/compile-time.md`. [M22]
 - **Inter-process transport**: any transport in scope beyond the UDP
   bridge, or single-process with bridges as components? [M4]

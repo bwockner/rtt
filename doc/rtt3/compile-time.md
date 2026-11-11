@@ -216,6 +216,106 @@ a run-time block, and the items above simply do not apply to it.
 - Compile time for larger matrices. Sizes are limited to what control and
   estimation blocks actually use.
 
+## Structured matrices: full 4 by 4 form without redundant operations
+
+**Aim.** A matrix with known structure, such as a projection onto a
+plane, an affine transform or an axis selector, should be written and
+composed as an ordinary 4 by 4 matrix, while the generated code performs
+only the arithmetic that the structure actually requires.
+
+**Why the optimiser will not do this by itself.** With constant entries
+and full inlining one might expect the compiler to drop multiplications
+by zero. Under IEEE rules it may not: `x * 0.0` is NaN when `x` is NaN or
+infinite and has a sign that depends on `x`, and `x + 0.0` changes a
+negative zero. The compiler removes these only with the finite-math and
+signed-zero relaxations, and finite-math is excluded here
+(`numerics.md`). Multiplication by one is removed, but zeros are not. So
+if the structure is to be exploited, it has to be known to the type
+system, not left to the optimiser.
+
+**Two different kinds of structure.** They need different mechanisms.
+
+*Sparsity: entries known to be zero, one or minus one.* An affine
+transform has a last row of 0 0 0 1; a projection onto a coordinate plane
+has a zero row and column; a scaling is diagonal.
+
+- `blk::smat<R, C, P>` is a matrix whose pattern `P` is a compile-time
+  value recording, per entry, whether it is zero, one, minus one or a
+  stored value.
+- Sums, products, transposes and application to a vector compute the
+  pattern of the result with `consteval` functions (zero times anything
+  is zero, one times `x` is `x`, a sum of zeros is zero) and emit
+  straight-line scalar code for the remaining terms only. The compiler
+  then vectorises and removes common subexpressions as usual.
+- The product of two patterned matrices is itself patterned, so structure
+  survives through a chain of compositions without the author tracking
+  it. Affine composed with affine stays affine; the product with a
+  general matrix degrades to general.
+- Storage is the full R by C array by default, so the object is a 4 by 4
+  matrix in memory and converts to a boundary type or an Eigen matrix
+  without work. Only the operations are skipped. A compact storage option
+  can come later if size matters.
+
+*Low rank and factored form: dense but cheaper than it looks.* A
+projection onto an arbitrary plane with unit normal `n` is `I - n nᵀ`. It
+has rank three, but no entry of its upper block is zero, so sparsity
+gains nothing. The saving is in the factored form: applying it to a
+vector is `x - n (n · x)`, a dot product and a scaled subtraction, and
+composing it never needs the nine products of a dense multiply.
+
+- A small set of factored types, each logically a 4 by 4 matrix:
+  identity plus rank-one update (projections and reflections), rotation
+  with translation (rigid transforms), diagonal scaling, and their
+  affine combinations.
+- Each provides `matrix()` to materialise the full form, application to
+  points and vectors using the factors, and products with each other that
+  stay factored where the result has a closed form and fall back to a
+  patterned or general matrix where it does not.
+- Constructors name the intent: `blk::project_onto_plane(n, d)`,
+  `blk::reflect(n, d)`, `blk::rigid(R, t)`, `blk::select_axes(...)`.
+
+**Rank deficiency as a type property.** Because the structure is known,
+some mistakes can be rejected at build time: asking for the inverse of a
+matrix whose pattern has a zero row or column, or of a projector, is a
+compile error with a message, where a dense library would return
+non-finite values at run time. A pseudo-inverse or a solve restricted to
+the range is offered for the factored types where it has a closed form.
+
+**Semantics to be aware of.** Skipping a multiplication by a structural
+zero means a NaN or infinity in the other operand does not propagate
+through that term, where the dense computation would have produced NaN.
+The result is the mathematically intended one, and non-finite inputs are
+caught by the finite check at the block boundary, but it is a difference
+from the dense path and is documented as such.
+
+**Compile time and run time.** The patterned and factored types use the
+same `if consteval` scheme as `blk::ct_matrix`: plain scalar code is
+valid in both, so these types work in constant expressions without a
+second implementation.
+
+**Existing work this draws on**, from general knowledge and not checked
+for this plan:
+
+- Eigen has fixed special cases but not general patterns: its transform
+  class has affine, compact-affine, isometry and projective modes that
+  skip work for the last row, and there are diagonal, triangular,
+  self-adjoint and permutation types.
+- Blaze offers zero, identity, diagonal, symmetric and triangular matrix
+  adaptors that are resolved at compile time.
+- Geometric-algebra libraries (Klein, Versor) encode which components of
+  an element can be non-zero in the type, and projections and reflections
+  are their native operations.
+- Symbolic code generators (SymForce, CasADi) take the other route: the
+  expression is simplified symbolically, zeros and common subexpressions
+  included, and plain scalar code is emitted.
+
+**Generated blocks may not need any of this.** Blocks here are intended
+to be generated. If the generator works from a symbolic description, it
+can emit already-simplified scalar code for each block, and no
+type-level machinery is needed in the block at all; the structured types
+are then for hand-written blocks and for compositions the generator does
+not see. Which of the two routes carries the load is an open point.
+
 ## Limits and costs
 
 - **Compile time and compiler memory.** Constant evaluation is an
@@ -263,3 +363,8 @@ Recorded as M22 in `questions.md`.
   list of the compile-time matrix type.
 - Which Eigen version is pinned? Its own `constexpr` support differs by
   release.
+- Which structures matter in practice: projections onto coordinate
+  planes or arbitrary planes, rigid and affine transforms, homogeneous
+  projective matrices, others?
+- Does the block generator work from a symbolic description that it
+  could simplify itself, or does it emit matrix code as written?
