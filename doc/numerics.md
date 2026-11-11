@@ -126,11 +126,53 @@ types follows the instruction set the translation unit is compiled for:
   and the schema hash is computed from names, scalar types and shapes, not
   from offsets and padding. A type whose layout differs is then still the
   same type to the simulator and the tools.
-- Capping Eigen's static alignment at 16 bytes on every platform
-  (`EIGEN_MAX_STATIC_ALIGN_BYTES`) would make layouts match and costs
-  little, since unaligned vector loads are cheap on current processors.
-  It is an option to decide once, project-wide; mixing settings is the
-  failure case.
+- **Capping Eigen's static alignment at 16 bytes is not recommended.**
+  An earlier draft of this document suggested it. The owner has seen a
+  crash with a 16-byte setting on x86, and that is the expected outcome
+  whenever the cap does not reach every piece of code that touches the
+  same Eigen objects. The setting changes the size and layout of types,
+  so it has to be identical in every translation unit **and in every
+  library that takes or returns Eigen types in its interface**, including
+  prebuilt ones. A dependency compiled with AVX and Eigen's defaults
+  expects 32-byte alignment; handing it an object from code capped at 16
+  faults on the first aligned load or silently reads the wrong offsets.
+  The same applies in reverse, and to any mix of vector flags without a
+  cap. The exact cause of the crash seen has not been established; see the
+  open points.
+
+### Boundary types that do not depend on flags
+
+The robust way out is to stop the layout of shared types from depending
+on compiler flags at all, instead of trying to keep the flags identical
+everywhere:
+
+- Types that cross a boundary (port data, block signatures, anything
+  shared with the simulator or stored in a recording) use Eigen's
+  unaligned fixed-size form, `Eigen::Matrix<double, R, C, Eigen::DontAlign>`
+  and the corresponding quaternion. Their alignment is that of the scalar,
+  their layout is the same under every vector flag and on both
+  architectures, and no cap or project-wide macro is involved.
+- The block package provides aliases for the common ones (for example
+  `blk::Vec3`, `blk::Mat4`, `blk::Quat`), so that writing a boundary type
+  is no more effort than writing the aligned one, and a concept that
+  rejects aligned Eigen types in port data and block signatures with a
+  message pointing to the alias.
+- Inside a block, code may copy into Eigen's default aligned types for
+  heavy computation, or compute directly on the unaligned ones; Eigen
+  still vectorises with unaligned loads, which cost little on current
+  x86-64 and AArch64 processors. For the small fixed sizes typical of
+  control and estimation the difference is unlikely to be measurable, and
+  the benchmark suite includes a case to confirm it.
+- Aligned Eigen types remain fine for a block's internal state and local
+  variables, where only one translation unit sees them.
+- Third-party libraries that expose Eigen types in their interfaces are
+  called from inside a block with whatever types they expect, converted at
+  the call. Their build flags then only have to agree with the block that
+  calls them, which is the constraint that exists today anyway.
+
+With this rule the two bullets above become checks on internal code only,
+and the layout of anything exchanged between machines or libraries is
+fixed by construction.
 
 ### Allocation
 
@@ -314,8 +356,14 @@ a build with every fast-math option on.
   default?
 - Eigen is used for state estimation and control (answered). Which
   version, and are Eigen types on ports today fixed-size, dynamic, or
-  both? Is capping Eigen's static alignment at 16 bytes project-wide
-  acceptable, to give the same layout on x86-64 and ARM?
+  both?
+- What were the circumstances of the crash seen with a 16-byte alignment
+  setting on x86: which macro or flag was set, was it applied to every
+  target, was AVX enabled (`-mavx`, `-march=native`), and were prebuilt
+  libraries that use Eigen involved? That would confirm whether the cause
+  was a mismatch between translation units or something else.
+- Is using unaligned Eigen types at boundaries acceptable, with aligned
+  types kept for internal computation?
 - Is any Eigen code built with OpenMP or linked against an external BLAS
   today?
 - Is there any cross-checking between two computers, or any checksum over

@@ -1583,9 +1583,9 @@ their own document, `numerics.md`. In summary:
   option can remove; it is on by default for links into actuators.
 - Real-time threads set their floating-point state explicitly at start
   and flush subnormals to zero by default.
-- Eigen types are supported as port data through an optional adaptor;
-  their alignment depends on compiler flags, so they are encoded member
-  by member between machines.
+- Eigen types are supported as port data through an optional adaptor.
+  The alignment of Eigen's default fixed-size types depends on compiler
+  flags, so types that cross a boundary use its unaligned form.
 
 ## 5. Phasing
 

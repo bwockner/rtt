@@ -83,8 +83,9 @@ first.
   target, with performance first, is decided, and Eigen is the
   linear-algebra library. Still open: is flushing subnormals to zero on
   real-time threads acceptable as the default? Which Eigen version, and
-  are Eigen types on ports fixed-size, dynamic, or both? Is capping
-  Eigen's static alignment at 16 bytes project-wide acceptable? Is any
+  are Eigen types on ports fixed-size, dynamic, or both? What were the
+  circumstances of the crash seen with 16-byte alignment on x86? Is using
+  unaligned Eigen types at boundaries acceptable? Is any
   Eigen code built with OpenMP or an external BLAS? Is there any
   cross-checking between two computers, or checksum over computed values,
   that would need identical results? See `numerics.md`. [M20]
