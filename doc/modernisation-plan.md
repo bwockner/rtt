@@ -12,7 +12,7 @@ and the Python and Lua bindings are out of scope and are not carried forward.
 | Deployment | Static first: a deployment is described in C++ and checked and wired by the compiler. Runtime loading (`ComponentLoader`, `PluginLoader`) stays as an optional module. |
 | Namespace and install | All new code lives in namespace `rtt3`, with its own header directory, library names and CMake package, so the fork installs next to RTT 2.x. |
 | Macros | Replaced by templates wherever the language allows; the few that remain are listed in 4.9. |
-| OS targets | Keep a pluggable OS layer, expressed as a C++ trait instead of the `fosi` C macros, so RTOS and bare-metal backends can be added. Linux is the reference backend. |
+| OS targets | Linux only, standard and PREEMPT_RT kernels, on x86-64 (desktop testing) and ARM (deployment). No other OS, RTOS or bare-metal backend is planned; the OS code is kept behind a small internal interface but is not a customisation point. |
 
 ## 2. Where the code is today
 
@@ -51,7 +51,7 @@ Measured on this tree, excluding `rtt/transports/corba`:
 Four libraries, each depending only on the ones above it:
 
 ```
-rtt3-os          OS trait + Linux backend; threads, clocks, mutexes, memory
+rtt3-os          Linux threads, clocks, mutexes, memory (x86-64 and ARM)
 rtt3-core        typed ports, channels, buffers, activities, execution engine,
                 TaskContext lifecycle. No names, no TypeInfo, no Boost.
 rtt3-reflect     names, TypeInfo/typekits, properties, operations by name,
@@ -115,9 +115,9 @@ library at a time.
   modules no longer needed, `configure`, `manifest.xml`, catkin and
   `env-hooks`, `.travis.yml`, `UseOROCOS-RTT*.cmake` (replace with a small
   config package and an `rtt3_add_component()` helper).
-- CI on GitHub Actions: GCC 9 (C++17 floor), GCC 13+/Clang 17+ (C++23) and
-  GCC 16 with `-std=c++26 -freflection` (4.8), with ASan, UBSan and TSan
-  jobs. GCC 16 defaults to `-std=gnu++20`, so the standard is always set
+- CI on GitHub Actions, Linux only: GCC 9 (C++17 floor), GCC 13+/Clang 17+
+  (C++23) and GCC 16 with `-std=c++26 -freflection` (4.8), on x86-64 and
+  AArch64 (4.3), with ASan, UBSan and TSan jobs. GCC 16 defaults to `-std=gnu++20`, so the standard is always set
   explicitly. TSan matters because the lock-free code is
   being rewritten.
 - Tests: move off Boost.Test to Catch2 or GoogleTest (see open questions).
@@ -140,7 +140,7 @@ Boost replacements in `rtt3-os` and `rtt3-core` (goal: zero Boost):
 | `boost::function_types` + `fusion` | variadic signature traits, `std::tuple`, `std::apply`, `std::invoke` |
 | `boost::intrusive_ptr` | a small in-tree intrusive pointer on `std::atomic` (kept because channel elements must not allocate a control block) |
 | `boost::array`, `tuple`, `cstdint` | `std::array`, `std::tuple`, `<cstdint>` |
-| `boost::thread`, `date_time` | `std::thread`/OS trait, `<chrono>` |
+| `boost::thread`, `date_time` | `rtt3::os` threads, `<chrono>` |
 | `boost::filesystem` | `std::filesystem` (only in `rtt3-reflect` loaders) |
 | `boost::lexical_cast` | `std::from_chars`/`to_chars` |
 | `oro_atomic_*`, `CAS`, `AtomicInt`, `volatile` flags | `std::atomic` with explicit memory orders |
@@ -160,36 +160,74 @@ Lambdas and function pointers keep working; code passing `boost::bind`
 results into `std::function` also keeps working. Code that stores the
 `boost::` types by name needs editing.
 
-### 4.3 OS abstraction as a trait
+### 4.3 OS layer: Linux on x86-64 and ARM
 
-Replace `fosi.h` and the per-target macro headers with a backend type that
-the core is compiled against:
+The use case is one OS on two architectures: desktop x86-64 for testing,
+usually on a standard kernel without real-time privileges, and ARM running
+PREEMPT_RT for deployment. The plan follows that instead of a general
+porting layer.
 
-```cpp
-struct linux_backend {
-    using thread = ...;  using mutex = ...;  using condition = ...;
-    using clock  = ...;  // monotonic, nanosecond
-    static result set_scheduling(thread&, sched_params);
-    static result set_affinity(thread&, cpu_set);
-    static void*  rt_allocate(std::size_t) noexcept;
-    ...
-};
-```
-
-- Selected at configure time (`RTT3_OS_BACKEND`), checked by a `static_assert`
-  trait set in C++17 and by a `concept os_backend` in C++20 and later, which
-  gives a porter a readable list of what is missing.
-- Linux backend: pthreads for priority, policy, affinity and
-  `clock_nanosleep`; `std::atomic`; `mlockall` and stack prefault helpers.
-- Requirements a bare-metal backend imposes on the core, to be honoured
-  from the start: no exceptions or RTTI required in `rtt3-core`
-  (`-fno-exceptions -fno-rtti` build in CI), no heap use after
-  configuration, no `<iostream>`, no `<filesystem>`, no static-init order
-  dependencies (`StartStopManager` goes).
-- TLSF becomes one optional `std::pmr::memory_resource`; `rt_string` and
+- Delete `fosi.h`, every non-Linux target (Xenomai, RTAI/LXRT, eCos, macOS,
+  Win32) and all `oro_arch` assembler. `rtt3-os` becomes a small set of
+  classes in `rtt3::os` written directly against POSIX and Linux calls. It
+  is an ordinary internal interface, not a template parameter or trait, so
+  the rest of the library is not templated on a backend. Keeping the OS
+  calls in this one library is the only provision for other systems.
+- Threads: `pthread` with `SCHED_FIFO`/`SCHED_RR`/`SCHED_OTHER`, optional
+  `SCHED_DEADLINE`, CPU affinity, thread names, and explicit stack size
+  with prefaulting.
+- Timing: `clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME)` for periodic
+  activities; `<chrono>` types in the API.
+- Locks: mutexes created with `PTHREAD_PRIO_INHERIT`; condition variables
+  on `CLOCK_MONOTONIC`. `std::mutex` is not used on real-time paths, as it
+  gives no priority inheritance guarantee.
+- Memory: `mlockall(MCL_CURRENT | MCL_FUTURE)`, heap prefault and
+  `mallopt` trimming control in a `rtt3::os::lock_memory()` start-up call.
+  TLSF becomes one optional `std::pmr::memory_resource`; `rt_string` and
   `oro_allocator` become pmr aliases.
-- `Logger` splits: a lock-free, non-formatting real-time front end in
-  `rtt3-core` and sinks in `rtt3-reflect`.
+- **Same binary on both kinds of machine.** When real-time scheduling or
+  memory locking is refused (no `CAP_SYS_NICE`, no rtprio limit, as on a
+  typical desktop or CI container), the request is downgraded and reported
+  once instead of failing, with a strict mode for deployment that turns the
+  downgrade into an error. `SimulationActivity` and the simulated clock are
+  kept for deterministic tests.
+- Start-up report: kernel preemption model (`/sys/kernel/realtime`),
+  effective scheduling policy and priority per thread, locked memory, CPU
+  isolation. This catches the common case of deploying to a kernel or
+  container that is not configured as expected.
+- `Logger` splits into a lock-free, non-formatting real-time front end in
+  `rtt3-core` and sinks in `rtt3-reflect`. No static-init order
+  dependencies (`StartStopManager` goes).
+- Since bare-metal is no longer a goal, `rtt3-core` may use exceptions at
+  configuration time and RTTI is not banned. The rules that stay are the
+  real-time ones: no allocation, no blocking without priority inheritance
+  and no exceptions thrown on the update path.
+
+**ARM specifics.**
+
+- Supported architectures: x86-64 and AArch64. 32-bit ARMv7 is an open
+  question, because it changes the atomics design (see below).
+- x86 has a strong memory model that hides most memory-ordering mistakes;
+  ARM does not. Lock-free code that passes every test on the desktop can
+  still be wrong on the target. The lock-free tests therefore have to run
+  on ARM hardware or at least under emulation, on every change (4.7).
+- Every atomic used on a real-time path is checked with
+  `static_assert(std::atomic<T>::is_always_lock_free)`. No algorithm may
+  depend on a double-width compare-and-swap; ABA protection uses index plus
+  generation counter packed in one 64-bit word, which is lock-free on
+  x86-64 and AArch64 but not guaranteed on ARMv7.
+- Cache-line padding uses a fixed project constant per architecture
+  instead of `std::hardware_destructive_interference_size`, whose value can
+  differ between compiler flags and so must not appear in installed headers.
+- Build: CMake toolchain files and presets for `aarch64-linux-gnu`, a
+  sysroot-based cross build, and static linking plus LTO as the default for
+  static deployments so that the deployed artefact is one executable.
+- CI: native x86-64 jobs; AArch64 jobs on ARM runners where available and
+  under `qemu-user` otherwise (functional tests only, since emulation says
+  nothing about timing or ordering).
+- Benchmarks from phase 0 (wake-up latency in the style of `cyclictest`,
+  port write/read latency, operation call cost) are run on both the desktop
+  and a reference ARM board with PREEMPT_RT, and tracked separately.
 
 ### 4.4 Typed core: ports and connections without strings
 
@@ -301,7 +339,7 @@ first design, not a follow-up.
 
 Added when the consumer's standard allows it, never required:
 
-- Concepts: `rtt3::port_data`, `rtt3::component_type`, `rtt3::os_backend`,
+- Concepts: `rtt3::port_data`, `rtt3::component_type`,
   `rtt3::connectable<Out, In>`; used to constrain the same templates that
   C++17 guards with `static_assert`.
 - `std::expected<T, rtt3::errc>` returning variants of configuration-time
@@ -326,7 +364,8 @@ Added when the consumer's standard allows it, never required:
   (`std::hardware_destructive_interference_size`).
 - Add single-producer/single-consumer variants and let the static
   deployment pick them when the link graph proves one writer and one reader.
-- Verification: TSan in CI, stress tests, and model checking of the queue
+- Verification: TSan in CI, stress tests on both x86-64 and ARM hardware
+  (4.3), and model checking of the queue
   and data-object algorithms (for example with Relacy or a similar tool).
 - `ExecutionEngine`: fixed-capacity message queue of non-allocating
   callables; `SendHandle` kept in the classic layer.
@@ -505,8 +544,8 @@ mechanism, and never in the API a component author writes against.
 | `ORO_SERVICE_PLUGIN`, `ORO_SERVICE_NAMED_PLUGIN`, `ORO_GLOBAL_SERVICE_*_PLUGIN` | The same registrar, for service types |
 | `ORO_main` (`os/main.h`) | Plain `main` calling `rtt3::run<App>()` |
 | `OROBLD_*`, `OROPKG_*`, `OROCFG_*`, `ORONUM_*` configuration macros (`rtt-config.h`) | Generated `rtt3/config.hpp` with `inline constexpr` values, consumed by `if constexpr` and template specialisation |
-| `OROCOS_TARGET` and the `fosi` function macros | The OS backend type (4.3); the backend is a template argument or type alias, not an `#ifdef` |
-| `oro_atomic_*`, `ORO_SCHED_*`, `ORO_*_PRIORITY` constants | `std::atomic`, scoped enums, `constexpr` values in the backend |
+| `OROCOS_TARGET` and the `fosi` function macros | Deleted; there is one target and `rtt3::os` calls Linux directly (4.3) |
+| `oro_atomic_*`, `ORO_SCHED_*`, `ORO_*_PRIORITY` constants | `std::atomic`, scoped enums, `constexpr` values in `rtt3::os` |
 | Token pasting and stringising helpers (`ORO_CONCAT_LINE`, `*_str`) | Deleted with their users |
 | `BOOST_STATIC_ASSERT`, `BOOST_PP` repetition for signatures up to N arguments | `static_assert`, variadic templates |
 | Deprecation and unused-argument macros | `[[deprecated]]`, `[[maybe_unused]]`, `[[nodiscard]]` |
@@ -566,9 +605,9 @@ Each phase ends with the full test suite green on the C++17 and C++23 jobs.
 | Phase | Content | Exit criterion |
 |---|---|---|
 | 0. Baseline | Fork, new CMake, CI, port tests off Boost.Test, benchmark harness (port write/read latency, operation call cost, start-up time, binary size, compile time) | Existing behaviour measured and reproducible |
-| 1. Strip | Remove CORBA, dead OS targets, rosbuild/catkin, Xerces, assembler atomics; mechanical Boost to `std` replacement | `rtt/os`, `base`, `internal` free of Boost except `fusion`/`function_types` |
+| 1. Strip | Remove CORBA, all non-Linux OS targets, rosbuild/catkin, Xerces, assembler atomics; mechanical Boost to `std` replacement | `rtt/os`, `base`, `internal` free of Boost except `fusion`/`function_types` |
 | 2. Signatures | Variadic rewrite of the operation machinery | No `fusion`, `mpl` or `function_types`; compile time down measurably |
-| 3. OS trait | Backend trait, Linux backend, pmr memory, logger split | Core builds with `-fno-exceptions -fno-rtti`; a stub second backend compiles |
+| 3. OS layer | Linux-only `rtt3::os`, pmr memory, logger split, graceful downgrade without real-time privileges, AArch64 cross build and CI | No non-Linux code left; tests pass on x86-64 and AArch64; latency baseline recorded on a PREEMPT_RT ARM board |
 | 4. Library split | Separate `rtt3-core` from `rtt3-reflect` and `rtt3-scripting`; move to the `rtt3` namespace, header path and package names; registrar replaces the component and plugin macros; classic API still implemented the old way | Core links with no name tables or `TypeInfo`; fork and RTT 2.x install side by side and load into one test process |
 | 5. Typed ports | New core ports, channels and lock-free primitives; classic ports become wrappers | Classic tests pass on wrappers; write/read latency no worse than baseline |
 | 6. Static deployment | `rtt3::deployment`, validation, scheduling fold, `expose` bridge | Example system runs with zero allocations after `main` starts and no string lookups |
@@ -616,16 +655,18 @@ Phases 4 to 7 depend on them.
    compile-time deployment be changeable at run time (disconnect, reconnect,
    change policy), or are they fixed for the life of the process? Fixed
    links allow the SPSC selection and inlining described in 4.5.
-6. **Error handling in the core**: `bool` returns as today, an in-tree
-   `expected`-like type usable from C++17, or exceptions at configuration
-   time only? The `-fno-exceptions` goal for bare-metal constrains this.
+6. **Error handling in the core**: with bare-metal out of scope,
+   exceptions are available. Proposed: exceptions or `expected` at
+   configuration time, `bool`/status returns on the update path. Agree?
 7. **Operations threading model**: keep both `OwnThread` and `ClientThread`
    with `send`/`collect`, or simplify the typed API to one model?
-8. **Which RTOS first**: naming one concrete second backend (Zephyr,
-   FreeRTOS, Xenomai 4/EVL, QNX) early will shape the trait far better than
-   a stub. Which one matters to you?
+8. **ARM variants**: is deployment AArch64 only, or is 32-bit ARMv7 also
+   needed? Which board and kernel should be the reference for latency
+   numbers?
 9. **Minimum compilers**: is GCC 9/Clang 10 an acceptable C++17 floor, and
-   GCC 13/Clang 17 for the C++23 layer? Is MSVC needed at all?
+   GCC 13/Clang 17 for the C++23 layer? Which compiler version does the
+   ARM cross toolchain or board vendor SDK provide? That may set the real
+   floor. MSVC is not supported.
 10. **ABI stability**: is a stable shared-library ABI for `rtt3-reflect`
     required for separately built component libraries, or is rebuild-the-world
     acceptable?
