@@ -339,16 +339,80 @@ the filter's consistency checked in simulation, not assumed.
 The UD measurement update is naturally sequential and combines with
 option 3.
 
+### Applied to the case at hand: an EKF with per-sensor varying covariance
+
+The filter in question is an extended Kalman filter in which each
+sensor's measurement covariance varies at run time. That narrows the
+options above:
+
+- **Option 1 is out.** The model is linearised about the current state
+  and the measurement covariance changes, so there is no steady-state
+  gain to precompute.
+- **Option 2 is the main saving.** The state-transition Jacobian and each
+  sensor's measurement Jacobian come from the symbolic model, so the
+  propagation and the per-sensor products are generated with their
+  sparsity and symmetry used. This is also where the Jacobians stop being
+  hand-derived.
+- **Option 3 fits the problem's shape, sensor by sensor.** Different
+  sensors are independent of each other, so the joint measurement
+  covariance is block diagonal with one block per sensor, and the update
+  can be done one sensor at a time:
+  - a sensor whose own noise is uncorrelated between its components is
+    processed as scalar updates, with the current variances passed in as
+    ordinary inputs. A varying variance costs nothing extra;
+  - a sensor with correlated components is processed as one small block:
+    a Cholesky solve of its innovation covariance, of the sensor's own
+    dimension (typically up to three or six), unrolled by the generator.
+    No factorisation of anything larger is needed anywhere in the filter;
+  - sensors arriving at different rates, or missing in a given step, are
+    handled by updating with whichever are present.
+- **Option 5** remains available if robustness or single precision
+  becomes a concern; the UD form takes a per-measurement variance
+  directly.
+
+Points that are specific to doing this with an EKF:
+
+- *Linearisation point.* Updating sensor by sensor is equivalent to one
+  joint update only if every sensor's Jacobian is evaluated at the same
+  prior state. Re-linearising at the partially updated state between
+  sensors is also legitimate, and often slightly more accurate, but the
+  result then depends on the order of the sensors. Either is acceptable;
+  the choice is made once, written down, and made the same way in the
+  simulator.
+- *Covariance as data.* Each measurement travels with its covariance and
+  a validity flag as one port data type, so the estimator block's inputs
+  are fixed-size and a sensor that reports nothing in a step is a flag,
+  not a missing message. The covariance is carried as a diagonal or as
+  one triangle, matching how the sensor's update is done.
+- *Guarding the varying covariance.* A covariance supplied at run time
+  can be wrong: zero, negative, non-finite, or absurdly small. The
+  estimator checks it before use and treats a bad one as an invalid
+  measurement. The innovation test for outliers uses the same per-sensor
+  innovation covariance that the update already computes.
+- *Covariance update form.* With gating and varying noise, the symmetric
+  Joseph form or a square-root form is preferred to the short form,
+  which can lose positive definiteness when a gain is modified or a
+  measurement is strongly weighted.
+- *Worst-case time.* The cost of a step depends on how many sensors
+  report. The execution-time budget for the block is that of the step in
+  which all of them do, and the per-sensor structure makes that bound
+  easy to state.
+
 ### Suggested order of attack
 
-1. Check whether a steady-state or scheduled gain is valid.
-2. Generate the propagation from the symbolic model, using structure and
-   symmetry.
-3. Use sequential scalar updates where the measurement noise is, or can
-   be made, uncorrelated.
-4. Where a solve remains, use Cholesky on fixed-size types.
-5. Consider a square-root form if robustness is a problem or single
+For the EKF described above:
+
+1. Generate the propagation and the per-sensor Jacobian products from the
+   symbolic model, using structure and symmetry.
+2. Update sensor by sensor: scalar updates where a sensor's components
+   are uncorrelated, a small Cholesky solve where they are not.
+3. Use a covariance update form that keeps symmetry and positive
+   definiteness.
+4. Consider a square-root form if robustness is a problem or single
    precision is wanted.
+
+For a time-invariant filter elsewhere in the system, check first whether
+a steady-state or scheduled gain is valid.
 
 ### Checking a restructured filter
 
@@ -489,11 +553,10 @@ a build with every fast-math option on.
   types kept for internal computation?
 - Is any Eigen code built with OpenMP or linked against an external BLAS
   today?
-- For the existing filters: how many states and measurements, is the
-  model time-varying or linearised about the state, is the measurement
-  noise diagonal, do measurements drop out, and is the covariance used
-  downstream? Those answers pick among the options under "Kalman-style
-  filtering".
+- The filter is an EKF with per-sensor varying covariance (answered).
+  How many states, how many sensors and of what dimension each? Is each
+  sensor's own noise uncorrelated between its components? Should sensors
+  be re-linearised between updates? Is the covariance used downstream?
 - Is single precision acceptable for any filter if a square-root form
   makes it numerically safe?
 - Is there any cross-checking between two computers, or any checksum over

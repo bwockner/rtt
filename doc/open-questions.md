@@ -97,10 +97,12 @@ first.
   machine and could be fixed at build time? Is unit checking on links
   wanted? Are execution-time budgets known for existing components? See
   `rtt3/compile-time.md`. [M22]
-- **Filters**: state and measurement dimensions, time-varying or not,
-  diagonal measurement noise or not, measurement drop-outs, and whether
-  the covariance is used downstream. Is single precision acceptable
-  with a square-root form? See `rtt3/numerics.md`.
+- **Filters**: the estimator is an EKF with per-sensor varying
+  covariance. Still open: number of states, number and dimension of
+  sensors, whether each sensor's noise is uncorrelated between its
+  components, whether to re-linearise between sensor updates, whether the
+  covariance is used downstream, and whether single precision is
+  acceptable with a square-root form. See `rtt3/numerics.md`.
 - **Generated kinematics**: SymForce is planned for closed-form
   kinematics. Which version, is generated code checked in or regenerated,
   which calculations stay on KDL, and what tolerance defines
