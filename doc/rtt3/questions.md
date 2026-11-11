@@ -2,7 +2,7 @@
 
 Part of the `rtt3` plan; see [README.md](README.md) for the index, the stages and how they depend on each other.
 
-The numbers are stable identifiers, written M1 to M22 elsewhere. A
+The numbers are stable identifiers, written M1 to M23 elsewhere. A
 consolidated and prioritised list covering all plans is in
 [../open-questions.md](../open-questions.md).
 
@@ -105,5 +105,10 @@ consolidated and prioritised list covering all plans is in
 22. **Compile-time evaluation**: are there parameters that are the same
     on every machine and worth fixing at build time? Is unit checking on
     links wanted? Are execution-time budgets known for existing
-    components? Which matrix structures should be exploited, and can
-    the block generator simplify symbolically? See `compile-time.md`.
+    components? See `compile-time.md`.
+23. **Generated kinematics**: SymForce is planned for closed-form
+    kinematics, replacing the two-dimensional KDL special case
+    (answered). Which version, and is generated code checked in or
+    regenerated at build time? Which calculations stay on KDL? What
+    tolerance defines "approximately planar" for each machine? See
+    `blocks.md`.

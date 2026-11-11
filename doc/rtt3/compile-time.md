@@ -309,12 +309,19 @@ for this plan:
   expression is simplified symbolically, zeros and common subexpressions
   included, and plain scalar code is emitted.
 
-**Generated blocks may not need any of this.** Blocks here are intended
-to be generated. If the generator works from a symbolic description, it
-can emit already-simplified scalar code for each block, and no
-type-level machinery is needed in the block at all; the structured types
-are then for hand-written blocks and for compositions the generator does
-not see. Which of the two routes carries the load is an open point.
+**Status: generation first, structured types deferred.** The owner plans
+to use SymForce in the simulator libraries for closed-form kinematics.
+The motivation is a speed-up already observed from restricting KDL to two
+dimensions for approximately planar calculations, which came at the cost
+of extra code complexity. Symbolic generation addresses the same need at
+the source: the planar restriction is stated once in the symbolic model,
+and the generator emits simplified scalar code with the full interface.
+See "Generated kinematics" in `blocks.md`.
+
+The patterned and factored matrix types above are therefore not part of
+the first version. They remain a documented option for hand-written
+blocks and for compositions that happen outside generated code, to be
+taken up only if profiling shows such a place.
 
 ## Limits and costs
 
@@ -366,5 +373,6 @@ Recorded as M22 in `questions.md`.
 - Which structures matter in practice: projections onto coordinate
   planes or arbitrary planes, rigid and affine transforms, homogeneous
   projective matrices, others?
-- Does the block generator work from a symbolic description that it
-  could simplify itself, or does it emit matrix code as written?
+- SymForce is planned for closed-form kinematics (answered). Is there
+  hand-written matrix code outside what it will generate that is hot
+  enough to justify the structured types?

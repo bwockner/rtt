@@ -174,6 +174,8 @@ These are decisions already taken; do not reopen them without being asked.
 - **spdlog**: the queue implementation was checked in its source; the
   statement that message text is formatted in the calling thread was not.
 - **MuJoCo**: described from general knowledge only.
+- **SymForce and KDL**: described from general knowledge only. SymForce
+  is the owner's planned generator for closed-form kinematics.
 - **Performance**: no benchmark has been run. Every expected gain and
   every latency target in the plans is an estimate.
 
