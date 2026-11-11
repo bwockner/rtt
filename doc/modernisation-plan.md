@@ -10,8 +10,8 @@ transport and the Python and Lua bindings are not carried forward.
 | Language and compiler | GCC 16 with `-std=c++26 -freflection` is the one supported configuration. Reflection is required: it is how components, data types and deployments are described. There is no C++23 mode and no hand-written description path. |
 | API | A new, clean API. The classic RTT API (`TaskContext`, `InputPort<T>`, `OperationCaller`, ...) is not provided, not even as a wrapper. Existing components are ported by hand with a migration guide. |
 | Namespace and install | Everything lives in namespace `rtt3` with its own header directory, library names and CMake package, so it installs next to RTT 2.x and can be loaded into the same process. |
-| Introspection | The typed core carries no names and no runtime type registry. Names, by-name lookup, property files and runtime loading are an opt-in library on top. |
-| Deployment | Static first: a deployment is described in C++ and checked and wired by the compiler. Runtime loading is optional. |
+| Introspection | The typed core carries no names and no runtime type registry. Names, by-name lookup, configuration files, the inspection service and runtime loading are a separate library on top. It is optional for the core but is part of every deployment that replaces today's deployer use (4.6). |
+| Deployment | Static first, with install-time variation as a first-class requirement: sensor and actuator stacks, kinematic variants and hardware simulation are selected per machine from a configuration file, without rebuilding (4.5). Runtime loading of component libraries remains for stacks not known at build time. |
 | Macros | Replaced by templates wherever the language allows. The few that remain are listed in 4.8. |
 | OS targets | Linux only, standard and PREEMPT_RT kernels, on x86-64 (desktop testing) and ARM (deployment). |
 | Errors | The API reports failure through `std::expected` and never throws. Exceptions are tolerated only at the boundary to user code (4.2). |
@@ -339,6 +339,63 @@ component type need no tags. What the compiler does with it:
 - **Dead code**: no factories, name tables or type descriptions are linked
   unless `rtt3-reflect` is used.
 
+#### Install-time variation: slots
+
+The current system uses runtime components and the deployer to choose,
+per installed machine, which sensor and actuator stacks, which kinematic
+variant and whether simulated hardware are used. A purely fixed deployment
+struct cannot express that, so the deployment gets a variation mechanism
+that keeps compile-time checking:
+
+```cpp
+struct App {
+    [[=rtt3::periodic(1ms), =rtt3::priority(79)]] Controller ctrl;
+
+    [[=rtt3::triggered_by<&rtt3::slot_port::command_in>]]
+    rtt3::slot<EthercatDrive, CanDrive, SimDrive> drive;        // exactly one is active
+
+    rtt3::slot<ScaraKinematics, GantryKinematics> kinematics;
+
+    rtt3::optional_slot<ForceSensorA, ForceSensorB> force;     // may be absent
+
+    static constexpr auto links = rtt3::links(
+        rtt3::link(&App::ctrl, &Controller::command, &App::drive, rtt3::port<"command_in">),
+        ...);
+};
+
+int main(int argc, char** argv) { return rtt3::run<App>(rtt3::machine_file(argv[1])); }
+```
+
+- A slot lists the alternatives that may occupy one position in the
+  system. Which one is active is read from the machine configuration file
+  at start-up and does not change afterwards.
+- The compiler checks every alternative against every link that touches
+  the slot, so each selectable combination is validated at build time. A
+  machine file can select a combination but cannot create an invalid one.
+  Links to a slot name the port by identifier; every alternative must have
+  a port of that name and value type, which reflection verifies.
+- Storage is sized for the largest alternative, so there is still no
+  allocation. The cost is one indirect call per slot per cycle, instead of
+  an inlined call; links between fixed nodes are unaffected.
+- Hardware simulation is an alternative in the hardware slots
+  (`SimDrive` above), selected by the same file, together with the
+  simulated clock from 4.3 where time itself is simulated. A simulated
+  machine therefore runs the same binary and the same control components.
+- Kinematic variation that is only a difference in parameters is a
+  property set in the machine file, not a slot; a slot is for variants
+  with different code.
+- The machine file also carries property values and, per slot, activity
+  overrides (period, priority, CPU). `app --check machine.toml` validates
+  a file against the binary and prints the resolved deployment without
+  touching hardware, so an installation can be verified before first start.
+
+The approach assumes the set of stacks is known when the software is
+built, even though the choice among them is made at install time. Where
+that does not hold, a slot can include `rtt3::loaded<Interface>`, an
+alternative supplied by a component library loaded at start-up (4.6 and
+4.8) and checked against the slot's port interface at load time instead of
+compile time.
+
 Optional `rtt3::autowire<App>` connects outputs to inputs whose name and
 value type both match, with ambiguity a compile error. It is off by
 default; explicit links are the norm.
@@ -346,23 +403,44 @@ default; explicit links are the norm.
 `rtt3::reflect::expose(app)` makes a static deployment visible to runtime
 tooling and lets dynamically loaded components attach to it.
 
-### 4.6 Runtime layer (`rtt3-reflect`)
+### 4.6 Runtime layer (`rtt3-reflect`): the deployer's replacement
 
-A new design, not a port of the classic interfaces. Scope:
+Today the deployer does three jobs: it assembles the system for a given
+machine, it applies configuration, and it is the access point for
+inspection tools. Assembly moves into the deployment struct and its slots
+(4.5). The other two jobs, and loading of components not known at build
+time, are this library. It is a new design, not a port of the classic
+interfaces.
 
-- Name tables generated by reflection: look up a node, port,
+- **Machine configuration files**: slot selection, property values and
+  activity overrides, with validation and clear errors that name the
+  offending entry. Format is open question 10.
+- **Name tables** generated by reflection: look up a node, port,
   property or operation by name and obtain a type-erased handle.
-- Type-erased connection of two ports by name, with the type check done by
-  comparing compile-time type identifiers. This is the one place a runtime
-  type check remains.
-- Type descriptions for data types (member names and types, enum value
-  names), generated by reflection from the type alone.
-  They drive property files, logging of port data and any transport.
-- Property files: load and save the described properties of a component.
-  Format is open question 10.
-- Runtime component loading from shared libraries (4.8).
-- An introspection interface sufficient for a task browser or reporter to
-  be written against it. Those tools themselves are outside this plan.
+- **Inspection service**: an in-process API plus a local socket protocol,
+  replacing the CORBA and task browser route. It lists nodes, slots and
+  their active alternative, lifecycle states, ports, connections,
+  properties and operations; reads and writes properties; calls
+  operations; and samples port data.
+- **Port taps**: sampling live data must not disturb the real-time path or
+  defeat the static channel selection. An exposed output port has an
+  optional observer, checked with one atomic load per write, that copies
+  samples into a lock-free buffer drained by a non-real-time thread.
+  Deployments that do not call `rtt3::reflect::expose` contain none of it.
+- **Data-type descriptions** (member names and types, enum value names),
+  generated by reflection, used by configuration files, taps and logging.
+- **Runtime component loading** from shared libraries (4.8), for
+  `rtt3::loaded` slot alternatives and for attaching extra components,
+  such as loggers or test stimuli, to a running system. Connections made
+  this way are type-erased and checked by comparing compile-time type
+  identifiers; this is the one place a runtime type check remains.
+- **A command-line inspection client** as the reference user of the
+  service. Porting or replacing the existing inspection tools is outside
+  this plan, but the protocol is documented for that purpose.
+
+A migration aid converts existing deployer XML and `.cpf` property files
+into machine files where the mapping is mechanical; deployer scripts
+(`.ops`) are not converted (open question 1).
 
 ### 4.7 Reflection (GCC 16)
 
@@ -509,9 +587,9 @@ Each phase ends with tests green on x86-64 and AArch64.
 | 1. OS layer | `rtt3::os`, memory locking, graceful downgrade, logger front end, simulated clock | Thread, timing and lock tests pass; wake-up latency measured on the ARM board |
 | 2. Lock-free primitives | Data object, buffers, queues, pool | Stress and model-checking tests pass on both architectures |
 | 3. Components and ports | `rtt3/meta/` component tables, `component` concept, ports, channels, policies, `connect`, activities, lifecycle, error type | Hand-wired example runs; port latency no worse than baseline |
-| 4. Static deployment | Deployment struct, validation, scheduling fold, channel selection, `run` | Example system runs with zero allocations after start-up and no string handling |
+| 4. Static deployment | Deployment struct, slots and machine-file selection (minimal reader), validation, scheduling fold, channel selection, `run` | Example system with a simulated and a real hardware alternative runs from one binary, with zero allocations after start-up and no string handling after configuration |
 | 5. Operations and properties | Annotated operations and properties, typed callers, engine messages | Operation call cost no worse than baseline |
-| 6. Runtime layer | `rtt3-reflect`: names, type-erased connect, reflected data-type descriptions, property files, registrar and loader, `expose` | A static deployment can be inspected and extended at run time; an RTT 2.x and an rtt3 component load into one process |
+| 6. Runtime layer | `rtt3-reflect`: full machine files and `--check`, names, inspection service and client, port taps, reflected data-type descriptions, registrar and loader, `expose`, converter for deployer XML and `.cpf` | A static deployment can be inspected and extended at run time; an RTT 2.x and an rtt3 component load into one process |
 | 7. Release | Delete the old `rtt/` tree, migration guide with a worked port of a real component, API and ABI policy | Tagged 3.0 |
 
 Phases 1 and 2 do not depend on any open question. Phases 3 to 5 depend
@@ -528,6 +606,10 @@ on questions 2 and 3; phase 6 on questions 1, 4 and 10.
   the lock-free and activity tests first.
 - **Lock-free rewrites** can introduce rare ordering bugs that x86 hides.
   Mitigation: 4.9 verification on ARM.
+- **Combinations of slot alternatives** multiply the checks the compiler
+  performs. Mitigation: each alternative is checked against the slot's
+  links independently, so cost grows with the number of alternatives, not
+  with the number of combinations.
 - **Compile time and error quality** on large systems. Mitigation:
   benchmark from phase 0; keep checks in constexpr functions over the
   generated tables.
@@ -570,9 +652,19 @@ on questions 2 and 3; phase 6 on questions 1, 4 and 10.
 9. **Test framework**: Catch2, GoogleTest or doctest?
 10. **Property files**: keep the `.cpf` XML format for existing
     configuration files, or move to another format (TOML, YAML, JSON)?
-11. **Runtime tooling**: how much by-name runtime access do you actually
-    use (task browser, reporter, deployer XML)? This sets how large
-    `rtt3-reflect` needs to be, and whether phase 6 can shrink.
+11. **Runtime tooling and variation**: partly answered (deployer-driven
+    install-time variation, inspection tools, hardware simulation).
+    Remaining points:
+    - Is the set of sensor and actuator stacks closed when the software is
+      built, or are stacks added in the field without a rebuild? This
+      decides whether slots are enough or `rtt3::loaded` is essential.
+    - How do the inspection tools connect today (task browser on the
+      machine, CORBA from another host, Lua)? Is remote access needed, or
+      is a local socket enough?
+    - Does simulation replace individual drivers, the whole hardware
+      layer, or time as well?
+    - Roughly how many machine variants exist, and do deployer scripts
+      (`.ops`) contain logic beyond loading, connecting and configuring?
 12. **Fallback mode**: decided. Reflection is required; there is no
     C++23 mode and no hand-written description path.
 13. **Exceptions from user hooks**: is `noexcept` hooks with termination
