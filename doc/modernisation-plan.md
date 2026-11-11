@@ -1078,6 +1078,9 @@ thread. The description of OCL here is from knowledge of that project, not
 from reading its source in this session, and should be checked against the
 version in use.
 
+The full work plan for the logger, with record layout, sinks, crash
+recovery, tests and steps, is in `rtt3-logging-plan.md`. In summary:
+
 **Design for `rtt3`: record now, format later.**
 
 ```cpp
