@@ -1635,34 +1635,89 @@ floating-point control state at start, from the deployment:
 - On AArch64 the baseline is NEON. Scalable vectors are not used in port
   data, for the same reason as `std::simd`.
 
-**Same numbers in the simulator and on the target.** Portable blocks
-(4.4) are meant to give the same results in both places. SIMD and
-floating-point code generation is where that most easily fails:
+**Agreement between the simulator and the target: within tolerance.**
+Decided: performance comes first, and the simulator and the real
+deployment are expected to agree within a tolerance, not bit for bit. A
+controller whose behaviour changes materially with last-bit differences
+is fragile, and real sensors and plants perturb it far more than the
+compiler does. The plan therefore does not promise or test for
+bit-identical results across machines, and blocks are built for speed:
+vectorisation on, fused multiply-add allowed, target-specific
+instructions used.
 
-- Fused multiply-add contraction is the commonest cause of differing
-  results between x86-64 and AArch64 builds. The block package builds
-  with contraction set explicitly (`-ffp-contract=off` for reproducible
-  blocks, or on everywhere), never left to the compiler's per-target
-  default.
-- No fast-math options for blocks that must match. They let the compiler
-  reorder operations differently per vector width.
-- A vectorised reduction (a sum or dot product) adds in a different order
-  from the scalar loop, so a block that must match bit for bit states its
-  summation order or is compared with a tolerance.
-- Blocks are therefore classed as **exact** (bit-identical across
-  machines, built with the reproducible settings, checked by replaying
-  recorded inputs on both architectures) or **tolerant** (compared within
-  a stated bound). The class is an annotation on the block and part of its
-  description.
-- Mathematical library functions (`sin`, `exp`) are not guaranteed to
-  round identically across library versions and architectures; an exact
-  block that needs them uses an implementation shipped with the block
-  package.
+What remains worth guarding against is not small numerical difference but
+the few compiler options that change behaviour in kind:
 
-**Checking it.** Replay tests run each exact block on recorded inputs on
-x86-64 and AArch64 and compare outputs bit for bit. The benchmark suite
-includes a block over array data built with and without vectorisation, so
-a lost vectorisation shows as a regression.
+- **Finite-math-only removes safety checks.** With `-ffast-math` (through
+  `-ffinite-math-only`) the compiler may assume no value is ever NaN or
+  infinite and delete tests such as `std::isnan(x)` or `x != x`. A guard
+  on a sensor value or on a command about to reach an actuator can vanish
+  without warning. This is the one fast-math component that is excluded.
+- **Reassociation breaks compensated arithmetic.** Code that depends on
+  the exact order of operations (compensated summation, error-free
+  transformations, some angle-wrapping tricks) can be simplified into
+  something wrong, not something slightly different. Such functions are
+  marked to be compiled without reassociation.
+- **Process-wide side effects.** Linking with fast-math can switch the
+  floating-point mode of the whole process at start-up on some toolchain
+  versions. The mode is set explicitly per thread (above), so this neither
+  surprises nor is relied on.
+
+Recommended build for blocks, as the default of the block package:
+optimise fully, allow contraction, drop `errno` and trapping-math
+semantics (`-fno-math-errno -fno-trapping-math -ffp-contract=fast`), and
+optionally allow reciprocal and signed-zero relaxations. Not
+`-ffinite-math-only`, and reassociation only where the author of a block
+turns it on.
+
+**Finite checks that cannot be optimised away.** Because non-finite
+values are the failure that matters on a real machine, the framework
+offers the check itself: a port or a block output annotated
+`rtt3::finite` is tested on every write, by inspecting the bit pattern
+with integer operations, so the test survives any floating-point option.
+A non-finite value puts the node into its error state and is not
+delivered. It is on by default for links into nodes marked as actuators
+and off elsewhere.
+
+**Comparing against the simulator, done so that tolerance works.**
+
+- *Per-step replay.* A block is fed recorded inputs step by step and its
+  outputs compared within a bound. Inputs are taken from the recording at
+  every step, so differences do not feed back and accumulate through the
+  rest of the system.
+- *State drift.* A block with internal state (an integrator, a filter)
+  still accumulates its own difference. Stable filters stay within a
+  bound; a pure integrator drifts without limit, so the comparison uses a
+  bound that grows with time or resynchronises the state periodically.
+- *Discrete decisions.* A threshold, a mode switch or a rounding to an
+  integer can fall on the other side for a last-bit difference, and the
+  two runs then differ by a whole event for a short time. Comparisons
+  around such events allow a shift of a sample or two in time, not just a
+  bound in value, or compare the event sequence separately from the
+  signals.
+- *Closed loop.* End-to-end comparison of simulation and real machine is
+  about behaviour (tracking error, settling, limits respected), not about
+  matching traces sample by sample; open-loop traces of a system with
+  contact diverge whatever the arithmetic.
+
+**Where bit-exact results would still be needed.** None of these is
+known to apply to the current system; they are listed so the decision can
+be revisited if one appears:
+
+- two computers computing the same value and cross-checking each other
+  for safety, or voting, with an equality comparison;
+- checksums, hashes or signatures taken over floating-point results;
+- regulatory or certification evidence that requires reproducing a
+  recorded run exactly on different hardware.
+
+Results on the same binary and the same machine are repeatable in any
+case, which is what regression tests on one platform need.
+
+**Checking it.** Replay tests compare within stated tolerances on x86-64
+and AArch64. The benchmark suite includes a block over array data built
+with and without vectorisation, so a lost vectorisation shows as a
+regression. A test confirms that the `rtt3::finite` check still fires in
+a build with every fast-math option on.
 
 ## 5. Phasing
 
@@ -1807,8 +1862,9 @@ on questions 2 and 3; phase 6 on questions 1, 4 and 10.
     - Is a single-process closed-loop test (controller plus MuJoCo plant
       block, stepped in lock) wanted for CI?
     - Does the simulator already have subsystems?
-20. **SIMD and numerical reproducibility**: do results have to match bit
-    for bit between the simulator and the target, or within a tolerance?
-    Is flushing subnormals to zero on real-time threads acceptable as the
-    default? Do port data types today contain vector types from a
-    linear-algebra library, and which one?
+20. **SIMD and numerics**: agreement within tolerance, with performance
+    first, is decided. Remaining points: is flushing subnormals to zero on
+    real-time threads acceptable as the default? Do port data types today
+    contain vector types from a linear-algebra library, and which one? Is
+    there any cross-checking between two computers, or any checksum over
+    computed values, that would need identical results?

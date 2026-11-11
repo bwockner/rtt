@@ -145,6 +145,10 @@ These are decisions already taken; do not reopen them without being asked.
 - On real-time paths: no allocation, no lock, no formatting, no file I/O,
   and no system call other than the thread's periodic sleep.
 - Linux only, x86-64 and AArch64.
+- Numerics: performance first. The simulator and the target agree within
+  a tolerance, not bit for bit. Do not build blocks with
+  `-ffinite-math-only` (and so not with plain `-ffast-math`): it removes
+  NaN and infinity checks.
 - Components, port data types and algorithm blocks are plain structs and
   plain functions with no framework dependency in their signatures, so
   they can be shared with the simulator.

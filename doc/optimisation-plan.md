@@ -426,9 +426,12 @@ SIMD and floating point, in particular:
   start of each real-time thread (in the component's `startHook` or
   `configureHook`, since it is per-thread state) removes that; it changes
   results slightly and must match the simulator.
-- **Build flags** are not set by RTT; components choose their own. Keep
-  floating-point contraction and fast-math settings the same for code
-  that must agree between the desktop and the ARM target.
+- **Build flags** are not set by RTT; components choose their own.
+  Building for speed is reasonable, with one exception: `-ffast-math`
+  includes `-ffinite-math-only`, which lets the compiler delete NaN and
+  infinity checks, including guards on sensor values and actuator
+  commands. Prefer `-fno-math-errno -fno-trapping-math -ffp-contract=fast`
+  to the blanket option, or add `-fno-finite-math-only` after it.
 
 ## 4. Order of work
 
