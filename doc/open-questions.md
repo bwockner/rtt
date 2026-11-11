@@ -117,11 +117,12 @@ first.
   the estimator's bandwidth, how the varying covariance is computed
   today, and whether recordings exist to fit the per-link constant. See
   `rtt3/numerics.md`.
-- **Inertial sampling**: the rate is a few hundred hertz. Which units,
-  what low-pass and output rate are configured, is there a common
-  trigger or hardware time stamps, do synchronised recordings exist, and
-  at what rate does the consuming control loop run? Aliasing and
-  sampling skew matter more than propagation delay at this rate. See
+- **Sensor set**: one inertial unit per link at about 100 Hz, plus GNSS.
+  Still open: whether the base moves; GNSS antenna position, number of
+  antennas, solution type, rate and latency; how the inertial units
+  report, their low-pass setting and time stamping; whether
+  accelerometers are used for inclination and biases are estimated; the
+  control loop's rate; whether synchronised recordings exist. See
   `rtt3/numerics.md`.
 - **Imperfect geometry**: tolerances or calibration accuracy of hinge
   axes and sensor mountings, rotation rates, and whether compliance is

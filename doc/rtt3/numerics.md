@@ -1378,6 +1378,111 @@ the fast rate, not to this filter.
    more than a sample between neighbours that is not explained by
    sampling skew.
 
+### The sensor set: one 100 Hz inertial unit per link, plus GNSS
+
+The owner has stated the sensors: an inertial unit on every link, each
+sampled at about 100 Hz, and GNSS. This subsection draws the
+consequences. Where the GNSS antenna is mounted, what kind of receiver
+it is and whether the machine's base moves are not yet known, so several
+points are conditional.
+
+**Sampling at 100 Hz.**
+
+- One sample is 10 ms and the usable band ends at 50 Hz. The units'
+  internal low-pass must cut off below that, around 40 Hz or lower, the
+  same on every unit. Anything the structure does above it must not
+  reach the output, or it returns as false slow motion.
+- Propagation delay along the links is far below one sample and is
+  dropped from consideration entirely. The coherence factor between
+  neighbouring units is still measured and used.
+- Sampling skew between units of up to 10 ms is significant. The error
+  it causes in the difference between two units is the angular
+  acceleration times the skew; at one radian per second squared that is
+  0.01 rad/s, which is typically several times a gyroscope's noise. If
+  the units report over a field bus, the time of reception also jitters
+  by an amount of this order. A common trigger, or time stamps taken at
+  the sensor, is therefore worth more here than any refinement of the
+  noise model.
+- The filter runs at the inertial rate. If the controller runs faster,
+  it uses the filter's prediction extrapolated to its own time, not a
+  faster filter.
+
+**The state is larger than the kinematic freedoms alone.** Earlier
+subsections spoke of a reduced state of about ten. That counts the
+mechanism's coordinates and rates. Every inertial unit also needs its
+gyroscope bias estimated, three states each, and possibly accelerometer
+bias. With five or six units that is fifteen to thirty-six further
+states, and a moving base adds its pose and velocity. A realistic total
+is thirty to fifty states. At 100 Hz this is still computationally
+trivial on the target, so the conclusion about effort stands, but:
+
+- the bias states are almost uncoupled from each other and enter each
+  measurement through an identity block, so the block structure
+  described under "Several poses at once" applies to them and is worth
+  using;
+- observability of each bias depends on the motion and on the other
+  sensors, which the off-line rank check should confirm for the actual
+  layout.
+
+**Accelerometers as inclinometers.** With hinge axes that are roughly
+horizontal, the direction of gravity seen by each unit gives that link's
+inclination, and differences between neighbouring links give the hinge
+angles without drift. This is likely the main source of absolute joint
+angle. Its errors are the link's own acceleration and vibration, which
+the measurement model should include and not merely tolerate:
+
+- the acceleration at the unit's mounting point due to the motion of all
+  joints upstream (centripetal and tangential terms through the lever
+  arms) is computed from the state by the generated kinematics and
+  subtracted in the prediction;
+- what remains is covered by the same accumulated-disturbance noise as
+  the gyroscopes, with the lever-arm terms noted earlier;
+- during strong acceleration the accelerometer covariance is raised, so
+  that the gyroscopes carry the estimate through the transient.
+
+**GNSS.**
+
+- *Frames and precision.* Receiver output is converted to a local
+  level frame about a fixed origin near the work site. Earth-referenced
+  coordinates are large numbers and must be handled in double precision
+  before the conversion; this is the nominal-state side of the
+  mixed-precision split, not the covariance side.
+- *Lever arm.* The antenna is not at the origin of the body it is
+  mounted on. Its position is predicted through the generated kinematics
+  from the state, which is also what lets a single antenna inform
+  orientation when the machine or the link carrying it rotates.
+- *Varying covariance.* The receiver reports its own accuracy and fix
+  type, and these change abruptly (between a fixed and a float
+  carrier-phase solution, or to a code-only solution). The measurement
+  covariance follows the report, with a floor, and the fix type is part
+  of the measurement's port data.
+- *Errors are not white.* Multipath and a converging carrier-phase
+  solution give errors that persist for seconds. Treated as white, a
+  slowly wandering position error is averaged into false confidence. A
+  small slowly varying offset state per axis, or an inflated covariance
+  matched to the correlation time, prevents that.
+- *Rate and latency.* GNSS arrives much less often than the inertial
+  data and tens to hundreds of milliseconds late. The filter keeps a
+  short fixed-size history so that a late measurement is applied against
+  the state at the time it was valid and its effect carried forward.
+  The receiver's time pulse gives the time stamp. At 100 Hz the history
+  is a few tens of entries.
+- *What it makes observable.* Position, and through the lever arm and
+  motion some orientation. Heading from a single antenna needs
+  translation or rotation of the antenna; a two-antenna receiver gives
+  heading directly. Which case applies is an open point.
+
+**A moving base changes the picture of the root.** If the machine's base
+is not fixed to the ground, the root of the chain is a free body with
+six freedoms, located by GNSS and the nearest inertial unit. Its roll
+and heading are then the out-of-plane freedoms that only the base has,
+and every inertial unit down the chain sees them. That is the earlier
+worked case in its most useful form: five or six units all carry
+evidence of the base's out-of-plane rotation, each weighted by the
+disturbance accumulated between it and the base, and a cascade that
+estimated the base from its own sensors alone would ignore all but one
+of them.
+
 ### Applied to the case at hand: an EKF with per-sensor varying covariance
 
 The filter in question is an extended Kalman filter in which each
@@ -1603,13 +1708,18 @@ a build with every fast-math option on.
   dynamics depend on another's? Are there bias or other vector states in
   addition?
 - What is the filter's rate and its share of the cycle time today?
-- Disturbances are time-correlated through their finite propagation
-  speed, and the inertial sample rate is a few hundred hertz (stated by
-  the owner). Which inertial units are used, what low-pass and output
-  rate are they configured with, and do they share a sampling trigger or
-  carry hardware time stamps? Do recordings with all units logged
-  together exist, so that correlation and coherence can be measured?
-  At what rate does the control loop that consumes the estimate run?
+- The sensors are one inertial unit per link at about 100 Hz, plus GNSS
+  (stated by the owner). Still open:
+  - Is the machine's base fixed, or does it move over the ground?
+  - Where is the GNSS antenna mounted, is there one antenna or two, is
+    the solution carrier-phase based, and what are its rate and latency?
+  - How do the inertial units report (which bus), with what low-pass
+    setting, and are their samples triggered together or time-stamped at
+    the sensor?
+  - Are accelerometers used for inclination today, and are sensor biases
+    estimated?
+  - At what rate does the control loop that consumes the estimate run?
+  - Do recordings with all units and GNSS logged together exist?
 - There is one inertial unit per link, and the default rule is that
   trust falls with distance along the chain, without modelling mode
   shapes (decided). What are the link lengths and the lowest
