@@ -111,9 +111,10 @@ to be unmapped, which interrupts all cores running the process.
 When TLSF is enabled, the options that let the pool grow through `sbrk`
 and `mmap` are on by default (`rtt/CMakeLists.txt:117-118`), so an
 allocation from a real-time thread can end in a system call and page
-faults. `OperationCaller::send` allocates from this pool on every call
-(`rtt/internal/LocalOperationCaller.hpp:708`), and from the general heap
-when TLSF is disabled (`:700`).
+faults. `OperationCaller::send` clones the caller through the real-time
+allocator on every call (`rtt/internal/LocalOperationCaller.hpp:705-709`).
+That allocator is this pool when TLSF is enabled and plain `malloc` when
+it is not (`rtt/os/oro_malloc.h:54`).
 
 - Change: no code change; size the pool for the application at start-up,
   build with pool growth off for deployment, and use the existing pool
