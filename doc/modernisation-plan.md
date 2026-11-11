@@ -1613,9 +1613,12 @@ on questions 2 and 3; phase 6 on questions 1, 4 and 10.
   limited to what GCC provides.
 - **Ecosystem.** OCL (deployer, taskbrowser, reporting), typegen/orogen and
   rtt_ros integration do not work with `rtt3` and are outside this plan.
-- **Licence.** The tree is GPL v2 with a linking exception. Code written
-  new for `rtt3` could be licensed differently, but anything derived from
-  the existing sources cannot; this needs a decision before work starts.
+- **Licence.** The existing code is GPL version 2 only, with a linking
+  exception, and has many copyright holders, so its licence cannot in
+  practice be changed. Code derived from it must stay under the same
+  terms; only code written new, without copying or adapting RTT 2.x
+  sources, can carry a different licence. The choice for `rtt3` has to be
+  made before code is ported. See `open-questions.md`, section 4.
 
 ## 7. Open design questions
 

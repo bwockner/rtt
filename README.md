@@ -55,13 +55,16 @@ that are still open.
 | [doc/modernisation-plan.md](doc/modernisation-plan.md) | Design and phasing of `rtt3` |
 | [doc/rtt3-logging-plan.md](doc/rtt3-logging-plan.md) | Lock-free logger for `rtt3` |
 | [doc/optimisation-plan.md](doc/optimisation-plan.md) | Low-risk optimisations of the existing RTT 2.x code, with no API change |
+| [doc/open-questions.md](doc/open-questions.md) | Undecided points, the licence position, and unverified assumptions |
+| [AGENTS.md](AGENTS.md) | Layout, build and test instructions, and working rules for contributors and automated agents |
 
 ### Relationship to upstream
 
-Upstream history, tags and branches are kept. The licence is unchanged
-(GPL v2 with a linking exception, see [COPYING.md](COPYING.md)). Changes
-made here to the RTT 2.x code are intended to remain compatible with
-existing components at source level.
+Upstream history, tags and branches are kept. The existing code remains
+under its original licence, GPL version 2 with a linking exception (see
+[COPYING.md](COPYING.md)); the licence for new `rtt3` code is not yet
+decided. Changes made here to the RTT 2.x code are intended to remain
+compatible with existing components at source level.
 
 
 RTT 2.x
