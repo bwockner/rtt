@@ -83,7 +83,8 @@ struct reference_axis {
 struct target {                       // something an instrument aims at
     target_id    id;
     point_id     at;                  // the reference point it marks
-    vec3         offset;              // from that point to the optical or phase centre
+    target_offset offset;             // from that point to the optical or phase centre; may be
+                                      // partly unknown, see "Points measured on a surface"
     double       prism_constant;      // metres, zero for an antenna
     component_id mounting;            // changes if the target is re-mounted
 };
@@ -208,7 +209,9 @@ struct onboard_snapshot {                     // what the machine's own sensors 
 
 using payload = std::variant<tape_distance, plumb_alignment, level_reading,
                              ts_polar, ts_position, gnss_position,
-                             touch, frame_tie, onboard_snapshot>;
+                             touch, frame_tie, onboard_snapshot,
+                             offset_measurement, width_measurement>;   // the last two: see
+                                                                       // "Points measured on a surface"
 
 }
 ```
@@ -382,6 +385,145 @@ lengths. An observation taken after constrains the new one. Nothing has
 to be invalidated, and the old data keeps contributing where it is still
 relevant.
 
+## Points measured on a surface, not where the model has them
+
+**The problem.** The model's reference points are usually on a link's
+centre plane: the centre of a pin, a point on the centreline. A prism, a
+tape end or a rover pole cannot be put there. It sits on an accessible
+surface, a side plate or a pin end, displaced from the modelled point
+along the normal of a reference plane by an offset that is often not
+known. That offset may be measured separately, typically with a tape to
+the centreline, or it may have to be estimated or ignored.
+
+The record therefore has to say three things that the earlier `target`
+with a fixed offset vector could not: which plane the measurement is
+referred to, that the displacement from it is a quantity in its own
+right, and whether that quantity is known, measured or unknown.
+
+**Entities.**
+
+```cpp
+namespace cal {
+
+using plane_id  = id<struct plane_tag>;
+using offset_id = id<struct offset_tag>;
+
+struct reference_plane {              // e.g. a link's centre plane, the mechanism's plane of motion
+    plane_id    id;
+    frame_id    frame;
+    std::string name;
+    vec3        normal;               // nominal, in the frame
+    point_id    through;              // a reference point lying in the plane
+    double      tilt_sigma;           // how well the nominal normal is trusted, radians
+};
+
+enum class side { positive, negative };          // which way along the normal
+
+struct surface_offset {               // distance from the plane to an accessible surface
+    offset_id    id;
+    plane_id     from;
+    side         towards;
+    std::optional<double> nominal;    // from drawings, if known
+    double       sigma;               // prior; large if unknown
+    component_id surface;             // the part carrying the surface (a plate, a pin end)
+};
+
+// How a target relates to the reference point it stands for.
+struct fixed_offset   { vec3 vector; };                      // fully known, e.g. a pole of known height
+struct normal_offset  { offset_id along; vec3 in_plane; };   // unknown or measured distance along a plane normal,
+                                                             // plus a known displacement within the plane
+using target_offset = std::variant<fixed_offset, normal_offset>;
+
+}
+```
+
+`target::offset` becomes a `target_offset`. A surface offset is an
+entity with an identifier, so every observation made on the same surface
+refers to the same one, and it is one unknown in the solve however many
+observations use it.
+
+**Observing the offset itself.** The tape to the centreline is an
+observation of that unknown, with its own payload:
+
+```cpp
+namespace cal {
+
+struct offset_measurement {           // direct measurement of a surface offset
+    offset_id of;
+    double    distance;               // metres, perpendicular to the plane
+    bool      to_centreline;          // measured to a marked centreline, as opposed to half a measured width
+};
+
+struct width_measurement {            // both faces accessible: full width across the plane
+    offset_id positive_side, negative_side;
+    double    width;
+};
+
+}
+```
+
+A width measurement constrains the sum of two offsets. With a symmetry
+assumption, stated as a link between the two offsets, it gives each.
+
+**Three ways to treat an offset**, chosen per offset by its prior and
+the observations available, not by separate code:
+
+- *Known*: a nominal value with a small sigma, from drawings or a
+  measurement already made.
+- *Measured in the session*: a wide prior and one or more
+  `offset_measurement` records. The offset is estimated, and the tape
+  reading is checked against the other observations like any other.
+- *Unknown and unmeasured*: a wide prior and nothing else. The component
+  of each observation along the plane normal then carries no information
+  about the mechanism, and only the components within the plane
+  constrain it. This is what "projecting onto the reference plane" means
+  in the fit; it happens automatically and needs no separate projected
+  observation type.
+
+**Mirror pairs.** Where the same feature is accessible on both sides,
+observing both and linking them as a mirror pair locates the centre
+plane without knowing either offset, provided the two are equal or their
+sum is known from a width measurement. It is the most robust way to
+find a centre plane with a total station and is worth planning for.
+
+```cpp
+struct mirror_pair {                  // added to the link kinds
+    observation_id positive_side, negative_side;
+    bool           assume_symmetric;
+};
+```
+
+**The plane's direction is uncertain too.** A side plate is not exactly
+parallel to the plane of motion. An error in the normal turns an offset
+of size d into an in-plane error of about d times the tilt. With several
+points observed on one surface, the tilt (two angles) can be estimated;
+otherwise it is carried as a considered uncertainty from `tilt_sigma`.
+
+**How much it matters.**
+
+- For a planar model of the mechanism, offsets along the normal of the
+  plane of motion do not enter the in-plane kinematics. They matter only
+  through the tilt term above, which is small, so treating them as
+  unknown is usually acceptable.
+- For the full three-dimensional model they matter directly.
+- A tape distance between two surface points on different links is the
+  hypotenuse of the in-plane distance and the difference of the two
+  offsets. If both points are on the same side with similar offsets the
+  effect is second order and often negligible; if they are on opposite
+  sides it is not. The residual is computed exactly from the offsets in
+  either case, so nothing has to be judged by hand, but the session plan
+  should prefer same-side pairs.
+- An offset along the normal is strongly correlated with the lateral
+  position and the roll of whatever carries the plane. A total station
+  alone separates them poorly; a tape to the centreline, a mirror pair
+  or a width measurement breaks the correlation. The observability
+  report shows which offsets were actually determined.
+
+**Invalidation.** A surface offset belongs to a component. If the plate
+is replaced or a wear pad is added, that is a new version of the
+component and a new unknown; the old observations keep constraining
+everything else.
+
 ## How the records become factors
 
 `std::visit` over the payload selects the residual function for that
@@ -472,5 +614,9 @@ expected precision. The following are not in that list and matter.
   status, or only coordinates?
 - Who is allowed to mark an observation invalid, and does that need a
   second person?
+- Which reference planes are used (each link's centre plane, one plane
+  of motion for the whole mechanism), on which surfaces are points
+  actually measured, and are both sides accessible for mirror pairs?
+  Are centrelines marked on the links?
 - Is a `stale` state for results acceptable in addition to the four
   observation states?
