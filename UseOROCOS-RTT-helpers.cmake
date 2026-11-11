@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 2.8.3)
+cmake_minimum_required(VERSION 2.8)
 
 #
 # Parses arguments or options
@@ -66,7 +66,7 @@ function( orocos_get_manifest_deps RESULT)
   find_program(XPATH_EXE xpath )
   if (NOT XPATH_EXE)
     if (ORO_USE_ROSBUILD OR ORO_USE_CATKIN)
-      message(SEND_ERROR "[orocos_get_manifest_deps] xpath not found. Can't read dependencies in manifest.xml or package.xml file.")
+      message(SEND_ERROR "[orocos_get_manifest_deps] xpath not found. Can't read dependencies in manifest.xml file.")
     else ()
       message(WARNING "[orocos_get_manifest_deps] xpath not found. Can't read dependencies in manifest.xml file.")
     endif ()
@@ -104,7 +104,7 @@ endfunction( orocos_get_manifest_deps RESULT)
 #   ${PACKAGE}_INCLUDE_DIRS     The include directories for this package.
 #   ${PACKAGE}_LIBRARY_DIRS     The library directories for this package.
 #   ${PACKAGE}_CFLAGS_OTHER     The compile flags other than -I for this package.
-#   ${PACKAGE}_LDFLAGS_OTHER    The linker flags other than -L and -l for thfully resolved link libraries for this package.
+#   ${PACKAGE}_LDFLAGS_OTHER    The linker flags other than -L and -l for this package.
 #   ${PACKAGE}_<LIB>_LIBRARY    Each fully resolved link library <LIB> in the above list.
 # 
 # Usage: orocos_find_package( pkg-name [OROCOS_ONLY] [REQUIRED] [VERBOSE]")

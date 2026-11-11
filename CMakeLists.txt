@@ -1,16 +1,24 @@
 #
 # Test CMake version
 #
-CMAKE_MINIMUM_REQUIRED(VERSION 2.6.0)
+CMAKE_MINIMUM_REQUIRED(VERSION 2.8)
 
-# for CMake 2.6 corrected behaviour (see "cmake --help-policy CMP0003")
-IF(POLICY CMP0003)
-  CMAKE_POLICY(SET CMP0003 NEW)
-ENDIF(POLICY CMP0003)
+# CMP0003: Libraries linked via full path no longer produce linker search paths
+# (see "cmake --help-policy CMP0003")
+if(POLICY CMP0003)
+  cmake_policy(SET CMP0003 NEW)
+endif()
 
-# Suppress cmake policy warning in included rtt_macros.cmake file in CMake >= 3.0.2 (see "cmake --help-policy CMP0026")
+# CMP0026: Suppress cmake policy warning in included rtt_macros.cmake file (CMake >= 3.0.2)
+# (see "cmake --help-policy CMP0026")
 if(POLICY CMP0026)
   cmake_policy(SET CMP0026 OLD)
+endif()
+
+# CMP0060: Link libraries by full path even in implicit directories (CMake >= 3.3)
+# (see "cmake --help-policy CMP0060")
+if(POLICY CMP0060)
+  cmake_policy(SET CMP0060 NEW)
 endif()
 
 ###################################################
@@ -22,7 +30,7 @@ endif()
 PROJECT(orocos-rtt)
 
 
-SET( RTT_VERSION 2.8.99 )
+SET( RTT_VERSION 2.10.0 )
 STRING( REGEX MATCHALL "[0-9]+" RTT_VERSIONS ${RTT_VERSION} )
 LIST( GET RTT_VERSIONS 0 RTT_VERSION_MAJOR)
 LIST( GET RTT_VERSIONS 1 RTT_VERSION_MINOR)

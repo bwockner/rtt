@@ -257,13 +257,13 @@ namespace RTT {
 
     bool StateMachine::execute()
     {
-        os::MutexLock lock(execlock);
         // before dealing with transitional states,
         // check if we're actually running.
         if (smStatus == Status::inactive || smStatus == Status::unloaded) {
             smpStatus = nill;
             return true;
         }
+        os::MutexLock lock(execlock);
 
         // internal transitional issues.
         switch (smpStatus) {

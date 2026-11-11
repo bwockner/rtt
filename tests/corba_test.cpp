@@ -35,8 +35,6 @@
 #include <transports/corba/CorbaConnPolicy.hpp>
 #include <transports/corba/RTTCorbaConversion.hpp>
 
-#include <boost/scoped_ptr.hpp>
-
 #include "operations_fixture.hpp"
 
 #include <memory>
@@ -620,11 +618,22 @@ BOOST_AUTO_TEST_CASE( testSharedConnections )
     // This test installs shared connections between mo1 and mo2 as writers and mi2 and mi3 as readers
 
 //    // Add a second input port mo3 to tc
-//    boost::scoped_ptr<RTT::OutputPort<double> > mo3(new RTT::OutputPort<double>());
+//#if __cplusplus > 199711L
+//    unique_ptr<RTT::OutputPort<double> >
+//#else
+//    auto_ptr<RTT::OutputPort<double> >
+//#endif
+//            mo3(new RTT::OutputPort<double>());
+
 //    tc->addPort("mo3", *mo3);
 
     // Add a second input port mi3 to t2
-    boost::scoped_ptr<RTT::InputPort<double> > mi3(new RTT::InputPort<double>());
+#if __cplusplus > 199711L
+    unique_ptr<RTT::InputPort<double> >
+#else
+    auto_ptr<RTT::InputPort<double> >
+#endif
+            mi3(new RTT::InputPort<double>());
     t2->addPort("mi3", *mi3);
 
     // This test tests shared connections port-to-port connections.
@@ -685,9 +694,11 @@ BOOST_AUTO_TEST_CASE( testSharedConnections )
     BOOST_REQUIRE( mi3->getManager()->getSharedConnection() );
     BOOST_CHECK_EQUAL( mi2->getManager()->getSharedConnection()->getName(), mi3->getManager()->getSharedConnection()->getName() );
     BOOST_CHECK_EQUAL( mi3->read(value), NoData );
+#ifndef RTT_CORBA_PORTS_DISABLE_SIGNAL
     testPortDataConnection(); // communication between mo and mi should work the same as for private connections
     BOOST_CHECK_EQUAL( mi3->read(value), OldData );
     BOOST_CHECK_EQUAL( value, 2.0 );
+#endif // RTT_CORBA_PORTS_DISABLE_SIGNAL
     BOOST_CHECK_EQUAL( mo2->write(3.0), WriteSuccess );
     value = 0.0;
     BOOST_CHECK_EQUAL( mi3->read(value), NewData );
@@ -714,9 +725,11 @@ BOOST_AUTO_TEST_CASE( testSharedConnections )
     BOOST_CHECK( mo1->getSharedBuffer() );
     BOOST_CHECK( mo2->getSharedBuffer() );
     BOOST_CHECK_EQUAL( mi3->read(value), NoData );
+#ifndef RTT_CORBA_PORTS_DISABLE_SIGNAL
     testPortDataConnection(); // communication between mo and mi should work the same as for private connections
     BOOST_CHECK_EQUAL( mi3->read(value), OldData );
     BOOST_CHECK_EQUAL( value, 2.0 );
+#endif // RTT_CORBA_PORTS_DISABLE_SIGNAL
     BOOST_CHECK_EQUAL( mo1->write(3.0), WriteSuccess );
     BOOST_CHECK_EQUAL( mo2->write(4.0), WriteSuccess );
     value = 0.0;

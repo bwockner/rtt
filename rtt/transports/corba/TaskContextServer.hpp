@@ -86,7 +86,7 @@ namespace RTT
         /**
          * Private constructor which creates a new servant using an alias
          */
-        TaskContextServer(TaskContext* taskcontext,const std::string& alias, bool use_naming, bool require_name_service);
+        TaskContextServer(TaskContext* taskcontext, const std::string& alias, bool use_naming, bool require_name_service);
 
         // initialize a new servant
         void initTaskContextServer(bool require_name_service);
