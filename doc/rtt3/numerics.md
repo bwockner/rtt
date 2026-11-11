@@ -809,6 +809,108 @@ through more arithmetic, with a constraint weighting to tune, and with
 no clean statement of which part of the measurement the mechanism cannot
 explain.
 
+### One joint filter versus a cascade of filters
+
+**What a cascade is.** The chain is split into stages, typically one per
+link or per group of sensors. The first stage estimates the base or root
+joint from its own sensors. Its estimate is handed to the next stage as
+a known input, and so on down the chain. Each stage is a small filter.
+
+**The defining property: information flows one way.** A downstream stage
+can use what upstream has estimated; an upstream stage never sees
+downstream measurements. So the assumption is correct: if a gyroscope
+far down the chain detects out-of-plane rotation, a cascade cannot use
+it to correct the root, even when the root is the only joint able to
+produce that rotation. What happens instead:
+
+- the root's stage has no measurement of that freedom, so its estimate of
+  it stays at whatever the prediction says, with growing or
+  never-shrinking uncertainty;
+- the downstream stage receives a root estimate that says "no
+  out-of-plane rotation", sees a measurement that says otherwise, and has
+  no state of its own that can explain the difference. It puts the
+  discrepancy into its gyroscope bias, or rejects the measurement as an
+  outlier;
+- the information is lost, and the symptom looks like unmodelled motion
+  or a sensor fault although the mechanism model could explain it
+  completely.
+
+In the single reduced filter the same measurement has a non-zero entry
+in the root's column of `H B`, and if the root is the only joint with
+that freedom, essentially the whole out-of-plane innovation goes to the
+root's rate.
+
+**The second difference: correlations.** Errors of different joints'
+estimates are correlated, because the same sensors inform several of
+them. The joint filter carries those correlations in `P_q`. A cascade
+discards them at every stage boundary, which shows up in one of two
+ways:
+
+- if the upstream estimate is treated as exact, the downstream stage is
+  overconfident: its covariance is smaller than its real error;
+- if the upstream covariance is injected as extra noise at every step,
+  the same upstream error is counted again each time as though it were
+  fresh, independent noise, which it is not. The result can be too
+  pessimistic or too optimistic depending on the time scales, and is not
+  correct in either case.
+
+**What a cascade does offer.**
+
+- Each stage is small, so the total cost is the sum of small cubes.
+- Stages can run at different rates and be tuned and tested separately.
+- A fault in one stage's sensors is contained downstream of it.
+
+**How those advantages compare after the reduction.** The cost argument
+mostly disappears: with the state reduced to the true degrees of
+freedom, the joint filter is itself small. Different sensor rates are
+handled in a joint filter by updating with whichever sensors report in a
+step. Separate development is retained by the per-sensor structure: each
+sensor contributes its own generated measurement function, and the
+parity residual localises a faulty sensor at least as well as stage
+boundaries do. So for this mechanism the joint reduced filter is the
+recommendation, and a cascade would give up accuracy for a cost saving
+that is no longer needed.
+
+**When a cascade is still reasonable.**
+
+- The upstream states are so well measured by their own sensors that
+  downstream sensors could add nothing worth having, for example a root
+  joint with a good encoder and a downstream link with a noisy
+  gyroscope.
+- A stage lives somewhere else, such as a drive's internal observer whose
+  output is all that is available.
+- The stages have widely separated time scales.
+
+It is not reasonable when a freedom is only observable from downstream,
+which is the case described. If a cascade is kept for other reasons, the
+state has to be allocated by observability, not by body: the root's
+out-of-plane freedom belongs in the stage that owns the sensor able to
+see it.
+
+**Intermediate designs**, if stages must stay separate:
+
+- *Consider states (Schmidt-Kalman).* The downstream stage carries the
+  upstream states and their cross-covariance but does not update them.
+  It becomes consistent, with correct covariances, but still passes no
+  information upstream.
+- *Covariance intersection* when fusing estimates whose correlation is
+  unknown: safe, at the price of conservative uncertainty.
+- *Feedback of downstream innovations to upstream stages.* This recovers
+  the lost information, and in doing so reconstructs the joint filter in
+  a more complicated form.
+
+**One caveat that applies to both designs.** A gyroscope alone cannot
+distinguish a constant rotation rate from a constant bias. In the joint
+filter the out-of-plane innovation is shared between the root's rate and
+the gyroscope's bias in proportion to their uncertainties, and what
+separates them over time is other evidence: an encoder or a second
+sensor on the root, an accelerometer's view of gravity as the angle
+accumulates, known stationary periods, and the fact that bias changes
+slowly while the joint moves. Whether the root's out-of-plane freedom is
+observable in practice depends on which of these exist, and the off-line
+rank check described above is the tool that answers it for a given
+sensor layout.
+
 ### Applied to the case at hand: an EKF with per-sensor varying covariance
 
 The filter in question is an extended Kalman filter in which each
@@ -1034,6 +1136,9 @@ a build with every fast-math option on.
   dynamics depend on another's? Are there bias or other vector states in
   addition?
 - What is the filter's rate and its share of the cycle time today?
+- Is the existing estimator a single filter or a cascade? If a
+  cascade, is that for cost, for rates, or because stages live in
+  different places (for example inside drives)?
 - Where are gyroscopes and encoders mounted along the chain, and is the
   base fixed? What should happen when a sensor reports motion the
   mechanism cannot produce: warn, add a modelled freedom, or switch from

@@ -107,6 +107,9 @@ first.
   used, and the state magnitudes, required
   resolutions and run length that decide whether a mixed-precision
   factored form is safe. See `rtt3/numerics.md`.
+- **Filter architecture**: is the existing estimator one filter or a
+  cascade, and if a cascade, why? The plan recommends one reduced joint
+  filter. See `rtt3/numerics.md`.
 - **Unexplained sensor motion**: when a gyroscope reports rotation the
   mechanism model cannot produce, should the system warn, model an extra
   freedom, or switch from the planar to the full model? Where are the
