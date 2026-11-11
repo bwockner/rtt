@@ -513,7 +513,7 @@ mechanism, and never in the API a component author writes against.
 | Logger source-location macros | `std::source_location` default arguments from C++20; no location under C++17 |
 
 **Registration without macros.** A component library names its exported
-types by instantiating a variable template at namespace scope:
+types with one line per type at namespace scope:
 
 ```cpp
 template class rtt3::plugin::registrar<Sensor>;               // name from Sensor::type_name or describe<Sensor>
