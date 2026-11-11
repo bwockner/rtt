@@ -2012,6 +2012,84 @@ instrument set-ups and the result are stored together as one calibration
 record per machine, so that a calibration can be reproduced, extended
 with later observations, or re-solved when the model changes.
 
+**Choosing validation poses: where the predicted error is largest.** A
+calibration is validated by an independent measurement, typically the
+total station on the tool point, in poses that were not used for
+fitting. Which poses to use should not be left to convenience: the
+calibration itself predicts where it is weakest, and those are the
+poses that test it hardest.
+
+*The prediction.* For a quantity that matters, usually the position of
+the tool point, and for any configuration of the machine, the expected
+error is obtained by pushing the uncertainties through the generated
+kinematics:
+
+- the calibrated parameters' covariance, through the sensitivity of the
+  tool point to each parameter in that configuration. This term grows
+  with reach, because angular errors near the root are multiplied by the
+  distance to the tool;
+- the estimator's own uncertainty of the joint coordinates in that
+  configuration, given the sensors, through the kinematic Jacobian. This
+  depends on the pose too: inclination from gravity is poor for a link
+  that is near vertical about the relevant axis, for example;
+- both together give a covariance of the tool point per configuration.
+  Its largest principal value, or its size along the direction that
+  matters for the task, is the predicted error there.
+
+*The search.* The predicted error is a smooth function of the joint
+coordinates, with derivatives available from the symbolic model. The
+workspace is sampled within joint limits, the worst samples are refined
+by a few steps of local optimisation, and poses that cannot be reached
+safely or measured (no line of sight to the instrument) are excluded. A
+handful of poses is then chosen greedily, each new one being the worst
+remaining that is not close to those already chosen, so that the set
+covers different weaknesses instead of five variations of one.
+
+*What else to include.* Predicted error only knows about the
+uncertainties in the model. Three further kinds of pose test what the
+model may be missing:
+
+- *Furthest from the calibration data.* Poses unlike any used in fitting
+  test extrapolation, where a model that has absorbed an unmodelled
+  effect fails first.
+- *Where unmodelled effects are largest.* Full reach and heaviest load
+  for deflection under gravity; both directions of approach to the same
+  pose for backlash; poses near a kinematic singularity.
+- *Where two models disagree most.* The planar and the full variant of
+  the kinematics, or the model with and without a compliance term,
+  differ by a computable amount in every pose; the poses where they
+  differ most show which one the machine follows.
+
+A few ordinary working poses are added so that the validation also says
+something about typical accuracy, not only about the worst case.
+
+*Reading the result.* In each validation pose there is a measured error
+and a predicted covariance.
+
+- The measured error against the specification is the accuracy test.
+- The measured error scaled by the predicted covariance is the honesty
+  test. Values consistently larger than expected mean the uncertainties
+  are understated or an effect is missing; consistently smaller means
+  they are overstated and the machine is better than it claims.
+- The pattern of the errors across poses is diagnostic. Error growing
+  with reach points to deflection or an angular offset near the root; a
+  jump between the two directions of approach is backlash; an offset
+  that turns with the base is a lever-arm or heading error.
+
+*Keeping validation independent.* The poses of largest predicted error
+are also, by the same computation, the poses where a new calibration
+observation would help most. Measurements taken for validation must not
+then be fed back into the fit and still counted as validation. If they
+are used to improve the calibration, a fresh set of validation poses is
+computed from the improved result and measured anew.
+
+*Motion as well as poses.* The same idea extends to trajectories. Fast
+reversals and high angular acceleration are where time offsets,
+vibration and the actuation models contribute most error, so a dynamic
+validation run is composed of the motions with the largest predicted
+error, checked against an independent reference such as the total
+station tracking a prism.
+
 **Sensor intrinsics.** Scale factors, axis non-orthogonality, bias as a
 function of temperature (which needs the temperature as an input), and
 the response of gyroscopes to acceleration.
@@ -2174,6 +2252,9 @@ properties already have (`compile-time.md`).
   tied to the GNSS frame by control points? Is the machine held static
   for each observation, and in how many poses? Is the repeated-touch
   observation (a tool point on a fixed mark) practical on this machine?
+- For validation: which quantity defines accuracy (tool point position,
+  an angle, a depth), what is the specification, and can the total
+  station track a prism during motion?
 - For identification and calibration: are commands recorded on the same
   time base as the sensors? What is measured on the actuator side of
   each joint (encoder, cylinder position, pressure)? Which parameters
