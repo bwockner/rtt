@@ -89,6 +89,10 @@ first.
   Eigen code built with OpenMP or an external BLAS? Is there any
   cross-checking between two computers, or checksum over computed values,
   that would need identical results? See `numerics.md`. [M20]
+- **Component style**: can algorithmic components be written as functions
+  of inputs returning outputs, so same-thread links are register-passed,
+  and which components need port members? Should inlining be bounded for
+  very large single-thread graphs? [M21]
 - **Inter-process transport**: any transport in scope beyond the UDP
   bridge, or single-process with bridges as components? [M4]
 - **ABI stability** for separately built component libraries. [M8]

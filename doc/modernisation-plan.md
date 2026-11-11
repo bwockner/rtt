@@ -11,6 +11,7 @@ transport and the Python and Lua bindings are not carried forward.
 | API | A new, clean API. The classic RTT API (`TaskContext`, `InputPort<T>`, `OperationCaller`, ...) is not provided, not even as a wrapper. Existing components are ported by hand with a migration guide. |
 | Namespace and install | Everything lives in namespace `rtt3` with its own header directory, library names and CMake package, so it installs next to RTT 2.x and can be loaded into the same process. |
 | Introspection | The typed core carries no names and no runtime type registry. Names, by-name lookup, configuration files, the inspection service and runtime loading are a separate library on top. It is optional for the core but is part of every deployment that replaces today's deployer use (4.6). |
+| Same-thread data flow | A link between two nodes in the same thread must cost what an inlined function call costs: values in registers where the compiler can keep them there, no write to a port or channel object (4.5). |
 | Deployment | Static first, with install-time variation as a first-class requirement: sensor and actuator stacks, kinematic variants and hardware simulation are selected per machine from a configuration file, without rebuilding (4.5). Runtime loading of component libraries remains for stacks not known at build time. |
 | Macros | Replaced by templates wherever the language allows. The few that remain are listed in 4.8. |
 | OS targets | Linux only, standard and PREEMPT_RT kernels, on x86-64 (desktop testing) and ARM (deployment). |
@@ -841,6 +842,103 @@ component type need no tags. What the compiler does with it:
 - **Dead code**: no factories, name tables or type descriptions are linked
   unless `rtt3-reflect` is used.
 
+#### Same-thread links compile to function calls
+
+**Requirement.** When two nodes run in the same thread, passing a value
+from one to the other must cost what an inlined function call costs. If
+the compiler can keep the value in a register it does; nothing is written
+to a port or channel object on the way, and there is no copy that a
+hand-written `consume(produce())` would not also make.
+
+**Why a "plain variable" is not enough.** An earlier part of this plan
+said a same-thread link is a plain variable without atomics. That still
+forces a store and a load: a port object that is a member of a component
+in static storage has an address other code may hold (inspection, other
+threads), so the compiler has to assume the store is observable and cannot
+remove it. To get register passing, the value must have no addressable
+home at all on the normal path.
+
+**How the fold is generated.** For each thread, the deployment generates
+one step function in which every same-thread link is a local value:
+
+```cpp
+// what the compiler sees for a thread holding sensor -> estimator -> controller -> drive
+void step() noexcept {
+    const auto raw   = sensor.update();
+    const auto state = estimate(est_state, est_params, raw, dt);
+    const auto cmd   = pid_step(pid_state, pid_params, target, state, dt);
+    drive.apply(cmd);
+}
+```
+
+- Links are single-assignment locals, in topological order. There are no
+  port objects, queues, status words or reference counts for them.
+- The framework's own layers between the blocks (node shims, lifecycle,
+  argument binding) are forced inline and contain no type erasure, no
+  virtual calls, no function pointers and no `std::function`.
+- Small values travel in registers. A value too large for registers, such
+  as a covariance matrix, is constructed once, in the place its consumer
+  reads it from, and is not copied between nodes.
+- A value with several readers in the thread is computed once and read by
+  each; fan-out costs nothing.
+
+**What a component has to look like to get this.** The value has to flow
+through arguments and return values, which is exactly the block form
+(4.4): a free function, or a member function whose object is the node's
+state. For these, the fold above is what is generated.
+
+Components written with port members (`state.get()`,
+`command.write(x)`) cannot be given the same guarantee, because the port
+is an object with an address. For them a same-thread link is one store by
+the writer into a slot and direct reads of that slot by the readers: no
+copy, no atomic, no queue, but one memory write. The recommendation is
+therefore: algorithmic nodes are blocks; port members are for nodes at the
+edges that talk to devices or other threads, where a memory write is not
+what limits them.
+
+**Things on a link that would force the value into memory, and how each
+is kept off the normal path.**
+
+| Feature | Handling |
+|---|---|
+| Port observation (4.6) | A read-mostly flag is tested; only when an observer is attached does a cold, out-of-line path copy the value out. With no observer the value never leaves its register |
+| `rtt3::finite` check | Operates on the value itself; no storage needed |
+| Substitutable link (4.5) | A branch selects between the computed value and the bridge's buffer. The memory read happens only on the substituted side |
+| Slot (4.5) | Dispatch is a switch over the alternatives, each inlined in its own branch, not a call through a pointer, so arguments and results still pass in registers |
+| Lifecycle | One test per thread per step that all its nodes are running selects the straight-line path; if any node is not running, a slower per-node path is taken |
+| Freshness and `when_fresh` conditions | Carried as ordinary values alongside the data |
+| Per-node counters | Per thread by default; per-node counting is opt-in because it adds a memory increment per node per step |
+
+**Where memory is inherent.** A delayed link holds the previous step's
+value, a hold between rates keeps a value across steps, and a block's
+state persists; these are stored because they must outlive the step.
+Links to other threads go through channels (4.9). A call into code the
+compiler cannot see (a C library built separately) passes arguments by
+the platform's calling convention.
+
+**What the compiler needs.**
+
+- It must see the bodies. Blocks are defined inline or as templates in
+  headers, or the deployment is built with link-time optimisation, which
+  is already the default for static deployments (4.3).
+- The generated step function is marked for aggressive inlining of
+  everything it calls. A thread can opt out for a very large graph, where
+  inlining everything would hurt the instruction cache.
+- Blocks are `noexcept` and, where possible, `constexpr`.
+
+**This is checked, not assumed.** No library can promise what an
+optimiser will do, so the property is tested:
+
+- *Compile-time evaluation.* For blocks that are `constexpr`, a test
+  evaluates a whole folded step at compile time with `static_assert`,
+  which proves the glue adds nothing that is not a constant expression.
+- *Generated code comparison.* A test compiles a folded chain and the
+  equivalent hand-written function with the release flags and fails if
+  the fold has more instructions or any store that the reference lacks.
+  It runs for x86-64 and AArch64.
+- *Benchmark.* A chain of trivial blocks is timed against the direct
+  call; the two must be indistinguishable.
+
 #### Install-time variation: slots
 
 The current system uses runtime components and the deployer to choose,
@@ -1153,7 +1251,10 @@ hop copies a reference-counted pointer, and unrelated fields share lines.
 The strategies below are ordered by how much they remove.
 
 **1. Do not share at all.** When the deployment folds two nodes into one
-thread (4.5), the link between them is a plain variable with no atomics.
+thread (4.5), the link between them is a local value in the generated
+step function, passed like a function argument, with no atomics and
+normally no memory write (see "Same-thread links compile to function
+calls").
 The data is written and read on the same core, in execution order, so it
 is still in the first-level cache when the consumer runs. This is the
 largest single gain and it follows from the scheduling fold, not from any
@@ -1733,3 +1834,8 @@ on questions 2 and 3; phase 6 on questions 1, 4 and 10.
 20. **SIMD and numerics**: agreement within tolerance, with performance
     first, is decided, and Eigen is the linear-algebra library. The
     remaining points are listed at the end of `numerics.md`.
+21. **Component style**: are your algorithmic components expressible as
+    functions of inputs returning outputs (blocks), so that same-thread
+    links can be register-passed? Which components genuinely need the
+    port-member style? For very large single-thread graphs, is inlining
+    the whole step acceptable, or should code size be bounded per thread?

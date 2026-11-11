@@ -146,6 +146,10 @@ These are decisions already taken; do not reopen them without being asked.
 - On real-time paths: no allocation, no lock, no formatting, no file I/O,
   and no system call other than the thread's periodic sleep.
 - Linux only, x86-64 and AArch64.
+- A link between two nodes in the same thread must cost what an inlined
+  function call costs: no write to a port or channel object, values in
+  registers where the compiler can keep them there. Framework glue on
+  that path has no type erasure, virtual calls or function pointers.
 - Numerics: performance first. The simulator and the target agree within
   a tolerance, not bit for bit. Do not build blocks with
   `-ffinite-math-only` (and so not with plain `-ffast-math`): it removes
