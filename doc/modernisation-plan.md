@@ -46,7 +46,7 @@ Measured on this tree, excluding `rtt/transports/corba`:
 
 ### Build new, do not convert
 
-With the classic API gone and C++23 as the floor, very little of the
+With the classic API gone and C++26 with reflection as the floor, very little of the
 existing code survives in recognisable form: the DataSource and typekit
 machinery, the `fusion`-based operation plumbing, the string-keyed
 interfaces and the `fosi` layer are all replaced, not modernised. A
