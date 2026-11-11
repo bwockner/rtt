@@ -560,7 +560,11 @@ the data model treats it explicitly.
   heading error of that difference divided by the baseline. The
   observability report flags this.
 - *On-board sources.* A two-antenna GNSS heading, or a slew sensor, tie
-  heading between situations even when the instrument does not.
+  heading between situations even when the instrument does not. Only
+  some machine configurations have two antennas, so which ties are
+  available is read from the machine's configuration record, and the
+  session plan differs accordingly: single-antenna machines need a slew
+  sensor tie or fresh heading observations after every slew.
 
 Heading error is multiplied by reach: at the tool point it produces a
 sideways error of the reach times the heading error. The session plan

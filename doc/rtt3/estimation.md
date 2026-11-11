@@ -1255,6 +1255,58 @@ the measurement model should include and not merely tolerate:
   translation or rotation of the antenna; a two-antenna receiver gives
   heading directly. Which case applies is an open point.
 
+**Two antennas on some configurations, one on others.** The owner has
+stated that some machine configurations carry dual GNSS and others do
+not. Heading is the quantity this changes, and it has to be handled as a
+property of the configuration, not as a design choice made once.
+
+- *What the second antenna adds.* The vector between the two antennas is
+  observed directly, which gives heading at all times, including at
+  rest, and one tilt angle as well. Its accuracy improves in proportion
+  to the distance between the antennas. It suffers the same outages and
+  multipath as position, and on a machine the working equipment itself
+  can block the sky for one antenna in some poses, so its covariance
+  varies and it is sometimes absent.
+- *One estimator, two sensor sets.* The baseline observation is one more
+  factor. On a configuration without the second antenna the factor is
+  permanently absent, which the fixed-structure formulation already
+  treats as zero weight. Nothing else in the estimator differs. Which
+  sensors a machine has is part of its machine file, and in the
+  deployment it is an optional alternative (`deployment.md`).
+- *What differs in behaviour, and must be visible.*
+
+  | | Dual antenna | Single antenna |
+  |---|---|---|
+  | Heading at rest | Observed | Not observed; uncertainty grows |
+  | Heading in motion | Observed directly and through motion | Through horizontal acceleration and lever-arm motion only |
+  | Start-up | Usable immediately | Needs motion before heading-dependent outputs are valid |
+  | Frozen linearisation in the marginal prior | Benign | The case that needs first-estimate Jacobians and the spurious-curvature monitor |
+  | Weak directions to watch | Few | Heading, and its combinations with gyroscope bias |
+
+  The observability summary that the estimator outputs is what tells a
+  consumer which situation it is in. Consumers must be written against
+  that summary, not against an assumption about the configuration.
+- *Calibration differences.*
+  - With two antennas, the direction of the antenna baseline relative to
+    the mechanism's plane of motion is a parameter to calibrate. A sweep
+    of one hinge with the total station gives the plane's heading in the
+    survey frame, the baseline gives it in the GNSS frame, and their
+    difference is that parameter. Driving in a straight line gives the
+    same without the instrument.
+  - With two antennas, heading ties between slew epochs come for free,
+    so recapture after a slew is rarely needed
+    (`calibration-data.md`). Without, the tie has to come from a slew
+    sensor or the integrated yaw rate, or the heading is re-established
+    with the instrument.
+  - Instrument-free field calibration is therefore considerably easier
+    on dual-antenna configurations; the single-antenna ones are the case
+    the field procedure has to be designed and proven for.
+- *Testing.* Both sensor sets are tested, in simulation and on recorded
+  data. The dual-antenna machine can supply the single-antenna test for
+  free: the same recording is processed with the baseline factor
+  switched off, and the result compared with the full solution, which
+  then serves as the reference for heading.
+
 **A moving base changes the picture of the root.** If the machine's base
 is not fixed to the ground, the root of the chain is a free body with
 six freedoms, located by GNSS and the nearest inertial unit. Its roll
@@ -2494,8 +2546,11 @@ properties already have (`compile-time.md`).
 - The sensors are one inertial unit per link at about 100 Hz, plus GNSS
   (stated by the owner). Still open:
   - Is the machine's base fixed, or does it move over the ground?
-  - Where is the GNSS antenna mounted, is there one antenna or two, is
-    the solution carrier-phase based, and what are its rate and latency?
+  - Some configurations have dual GNSS and some do not (answered).
+    Where are the antennas mounted, what is the distance between the
+    two, is the solution carrier-phase based, and what are its rate and
+    latency? Which configurations are single-antenna, and do they have
+    a slew sensor?
   - How do the inertial units report (which bus), with what low-pass
     setting, and are their samples triggered together or time-stamped at
     the sensor?
