@@ -136,6 +136,10 @@ first.
 - **Imperfect geometry**: tolerances or calibration accuracy of hinge
   axes and sensor mountings, rotation rates, and whether compliance is
   significant. See `rtt3/estimation.md`.
+- **Sensor biases**: whether stationary recordings exist to measure bias
+  instability, whether the units report temperature, how long warm-up
+  is, and how often the machine is still in normal work. These set how
+  fast the estimator may move a bias. See `rtt3/estimation.md`.
 - **Unexplained sensor motion**: when a gyroscope reports rotation the
   mechanism model cannot produce, should the system warn, model an extra
   freedom, or switch from the planar to the full model? Where are the

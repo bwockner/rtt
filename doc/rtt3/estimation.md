@@ -1425,6 +1425,104 @@ discrete answer is needed, in particular for static calibration poses
 and zero-rate updates. Add mixture factors if bias estimation during
 operation needs the benefit of stillness without a prior decision.
 
+### Keeping other errors out of the slowly varying biases
+
+**The mechanism.** A bias state is an integrator of the residual. Any
+error that the model does not explain and that does not average to zero
+(a misalignment, an unmodelled lever-arm term, coloured vibration, a
+time offset) pushes the bias a little at every update, and the bias
+keeps what it is given. Since the true bias is known to move slowly, the
+estimator should not be able to move its estimate quickly. The measures
+below limit that rate. They are from general knowledge of inertial
+estimation and have not been tried on the system in question.
+
+**1. Give the bias only as many unknowns as its real rate of change
+warrants.** In the windowed estimator the most direct control is
+structural. A bias does not need a value at every grid state. It is
+represented by a few values spaced at the time scale on which it can
+really change, tens of seconds to minutes, with every grid state in
+between using the interpolated value. The estimator then cannot make the
+bias follow anything faster than that spacing, whatever the residuals
+do, and the number of unknowns falls as well. A slow random walk links
+consecutive bias values.
+
+**2. Take the random-walk strength from the sensor, not from tuning.**
+The noise that drives the bias is set from the unit's measured bias
+instability and rate random walk (from a long stationary recording, by
+Allan variance), not chosen to make the filter look good. A value larger
+than the sensor's real behaviour is an open invitation for other errors
+to be absorbed.
+
+**3. Tie the bias to what is known about it.** A pure random walk can
+wander without limit. The physical bias cannot: it stays within a known
+range of its calibrated value. A weak restoring term towards the
+calibrated value (a first-order Gauss-Markov model with a long time
+constant) bounds the variance and means that an error pushed into the
+bias decays instead of persisting. In graph terms it is a prior factor
+on each bias value centred on the calibration.
+
+**4. Remove the largest slow component by model.** Most slow bias
+movement is thermal. With the bias calibrated as a function of
+temperature, the state only has to represent the small remainder, whose
+range and random walk are then much tighter. The process noise can also
+follow the rate of temperature change, so the bias is free to move
+during warm-up and nearly fixed in steady conditions.
+
+**5. Update the bias only when it is observable.** Using the curvature
+indicator: while the current motion does not separate a bias from the
+quantities it is confused with, the bias is held (treated as a
+considered parameter: its uncertainty is accounted for but its value is
+not changed), and it is updated only when the curvature along it is
+above the threshold. Stillness is the clearest such condition, since a
+gyroscope then reads its bias directly; those periods act as anchors
+between which the bias is interpolated.
+
+**6. Apply only part of the update.** A graded version of the previous
+point: for selected states the estimator applies a chosen fraction of
+the computed correction, with the covariance updated consistently for
+that fraction. Zero is the considered-parameter case, one the ordinary
+update. It gives a direct, per-state control over how fast residuals can
+flow into a bias while keeping the reported uncertainty honest, and is
+simple to add to either a filter or the windowed solver.
+
+**7. Give the errors somewhere else to go.** Leakage is a symptom of a
+missing model term. Everything described earlier reduces it at the
+source: lever-arm accelerations in the accelerometer model, the
+accumulated disturbance with its coherence, the treatment of correlated
+samples, estimated time offsets, calibrated mounting, and a robust loss.
+Where a disturbance is coloured, a short-memory state for it absorbs
+what would otherwise go into the long-memory bias.
+
+**8. Do not let the bias uncertainty collapse or run away.** If the
+bias covariance shrinks to nothing, a real change can no longer be
+followed; if it grows without bound, the bias absorbs everything. The
+restoring term gives a ceiling. A floor consistent with the sensor's
+instability gives the other limit.
+
+**Detecting leakage that still occurs.**
+
+- The estimated bias moving faster than the sensor's instability allows
+  is evidence that something else is being absorbed. The estimator
+  compares the two and flags it.
+- A bias estimate that correlates with the motion, the load or the
+  heading, and not with temperature, is being used as a dumping ground.
+- The bias found during stillness is close to the truth. A consistent
+  difference between it and the value the estimator holds just before
+  each still period measures the leakage directly.
+
+**The cost of being too strict.** A bias that is held too rigidly
+pushes its real changes, above all thermal transients after power-on,
+into the states it is confused with, typically heading or an
+inclination. That is why the limits are tied to the sensor's measured
+behaviour and to temperature, and not simply made as tight as possible.
+
+**Suggested default.** Sparse bias values in time with a
+sensor-derived random walk and a weak pull towards a
+temperature-compensated calibration; updates gated by observability,
+with stillness as the anchor; the leakage checks running as monitors.
+Partial updates are kept as the adjustment to reach for if a particular
+bias still drifts.
+
 ### A truncated factor graph in place of a pure EKF
 
 **Direction from the owner:** the estimator is to be a truncated factor
@@ -2598,6 +2696,10 @@ properties already have (`compile-time.md`).
   covariance factor) is the proposed way to use 32-bit lanes. What are
   the magnitudes and required resolutions of the states, and how long
   does the filter run without a reset? Those decide whether it is safe.
+- For the biases: do long stationary recordings exist from which each
+  unit's bias instability can be measured? Do the units report
+  temperature? How long is warm-up, and does the machine stand still
+  often enough in normal work to anchor the biases?
 - How is stillness detected today for accelerometer inclination, and
   what goes wrong with it (chatter, engine vibration, slow motion
   missed)? Are commands available to the estimator as a prior?
