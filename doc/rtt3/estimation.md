@@ -1523,6 +1523,104 @@ with stillness as the anchor; the leakage checks running as monitors.
 Partial updates are kept as the adjustment to reach for if a particular
 bias still drifts.
 
+### Very stable gyroscopes: account for the bias, do not estimate it
+
+**The owner's experience.** With gyroscopes whose bias changes extremely
+slowly, of the order of a degree over hours, results improved when the
+bias was left out of the state estimation altogether. The question is
+whether it would be better to put it back with a severely limited rate
+of change.
+
+**Assessment: neither. Keep it out of the solve, but keep it in the
+model.** There are three options, not two.
+
+| | Bias estimated | Bias omitted | Bias considered |
+|---|---|---|---|
+| Value used | Estimated continuously | A fixed correction, or none | A fixed correction, re-measured at stillness |
+| Path for other errors to enter it | Yes, however slow | None | None |
+| Reported uncertainty | Includes bias | Ignores bias: slightly overconfident | Includes bias |
+| Extra unknowns | Three per unit | None | None |
+
+The third is what the earlier subsection calls a considered parameter.
+The bias is not an unknown, so nothing can leak into it, which is what
+made omission work. Its uncertainty is still carried into the estimate,
+so the covariance stays honest, which omission gives up. Putting the
+bias back as a state with a very small rate limit approaches the same
+thing from the other side, but any non-zero path still integrates
+residuals over hours, and it adds unknowns to gain nothing.
+
+**Why estimating it is unlikely to help here.** The argument is about
+observability, not about tuning.
+
+- On the axes that have an absolute reference (inclination from gravity,
+  joint angles from neighbouring units, heading with two antennas) a
+  bias this small produces an angle error that the reference removes
+  long before it matters. The bias is observable there, and not needed.
+- On an axis with no absolute reference, heading at rest with a single
+  antenna, the bias would matter, since it accumulates uncorrected. But
+  there it is not observable from motion either: an unobserved heading
+  and a yaw bias are the same thing to the estimator.
+- The one situation in which the bias is both useful and observable is
+  stillness, when the gyroscope reads it directly. That is a
+  measurement of a constant, not a job for the motion estimator.
+
+So an estimated bias state is either redundant or undetermined almost
+all of the time, and in both cases it is available to absorb whatever
+the model does not explain. That matches what was observed.
+
+**Proposed handling.**
+
+- *The value.* Each unit's bias is a correction applied to its readings.
+  It is measured by averaging during stillness (with the stillness
+  decision of "Deciding when accelerometer inclination can be trusted"),
+  starting from the calibrated, temperature-compensated value.
+- *Re-anchoring.* When a still period is long enough, the correction is
+  replaced by the new average. A new value that differs from the old by
+  more than the sensor's instability allows for the time elapsed is not
+  applied silently; it is flagged, because it more likely means the
+  machine was not really still, or something else has changed.
+- *The uncertainty.* The bias has a standard deviation that starts at
+  the accuracy of the last anchor and grows slowly with the time since
+  it, at the sensor's measured instability. That uncertainty enters the
+  estimate as a considered parameter. On a single-antenna machine at
+  rest, the reported heading uncertainty then grows at the right rate,
+  and a consumer can see when heading has become too uncertain to use.
+- *No bias unknowns in the factor graph* for these units, which also
+  removes three unknowns per unit from every solve.
+
+**A check worth making: the Earth's rotation.** The Earth turns at
+fifteen degrees per hour. A gyroscope stable to a fraction of a degree
+per hour sees that plainly: at rest it reads its bias plus the
+component of the Earth's rate along each of its axes, and that
+component changes whenever the unit's orientation changes. If the Earth
+rate is not modelled, then:
+
+- a "bias" measured at stillness contains an Earth-rate term that is
+  only right for that orientation;
+- an estimated bias state is forced to follow the orientation of the
+  link, which looks exactly like other errors leaking into it, and
+  could be part of why estimating the bias made things worse;
+- heading integrated from the yaw rate drifts by up to several degrees
+  per hour from this cause alone, far more than the sensor's own bias.
+
+The Earth-rate vector is known from latitude, and its components in
+each sensor's frame follow from the estimated orientation, so
+subtracting it is a small addition to the gyroscope model. Whether it
+matters depends on what "a degree over hours" refers to: if the sensors
+really are that stable, Earth rate is the dominant uncorrected term and
+must be included; if the figure describes the angle error after all
+corrections, it may already be hidden in the bias. This needs
+confirming against the sensor's data sheet and a stationary recording
+in two orientations.
+
+**When to reconsider.** An estimated bias state, sparse in time and
+tightly limited as in the previous subsection, becomes worthwhile only
+if all of these hold: the bias changes by an amount that matters between
+still periods, some axis lacks an absolute reference for long stretches,
+and the motion in those stretches makes the bias observable. Thermal
+transients after power-on are the likeliest case, and a temperature
+model of the bias handles them better than a free state does.
+
 ### A truncated factor graph in place of a pure EKF
 
 **Direction from the owner:** the estimator is to be a truncated factor
@@ -2696,6 +2794,12 @@ properties already have (`compile-time.md`).
   covariance factor) is the proposed way to use 32-bit lanes. What are
   the magnitudes and required resolutions of the states, and how long
   does the filter run without a reset? Those decide whether it is safe.
+- Gyroscope bias was previously left out of the estimation with good
+  results (stated by the owner). Does "a degree over hours" describe
+  the sensor's bias stability or the angle error after corrections?
+  Which gyroscopes are these? Is the Earth's rotation compensated
+  today? Was a fixed bias correction applied when the state was
+  omitted, and how was it obtained?
 - For the biases: do long stationary recordings exist from which each
   unit's bias instability can be measured? Do the units report
   temperature? How long is warm-up, and does the machine stand still

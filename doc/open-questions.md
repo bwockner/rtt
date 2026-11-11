@@ -136,6 +136,11 @@ first.
 - **Imperfect geometry**: tolerances or calibration accuracy of hinge
   axes and sensor mountings, rotation rates, and whether compliance is
   significant. See `rtt3/estimation.md`.
+- **Gyroscope bias treatment**: proposed as a considered parameter,
+  measured at stillness and not estimated, following the owner's
+  experience that omitting it helped. Still open: what "a degree over
+  hours" refers to, which gyroscopes are used, and whether Earth rate is
+  compensated. See `rtt3/estimation.md`.
 - **Sensor biases**: whether stationary recordings exist to measure bias
   instability, whether the units report temperature, how long warm-up
   is, and how often the machine is still in normal work. These set how
