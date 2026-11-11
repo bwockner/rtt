@@ -1567,6 +1567,103 @@ under the allocation guard and the system call filter in the test suite,
 and a benchmark records the cost per message in both the filtered and the
 recorded case.
 
+#### SIMD and floating point
+
+SIMD matters to the framework in four places: how data is laid out and
+copied, how threads are set up, how blocks are compiled, and whether the
+simulator and the target compute the same numbers. The framework does not
+vectorise user algorithms; it must not get in the way of code that is
+vectorised, and it must make the consequences visible.
+
+**Alignment is preserved end to end.**
+
+- Channels, buffers, data objects and log rings honour the alignment of
+  the value type, including over-aligned types (32 bytes for AVX, 64 for
+  AVX-512, vector types from linear-algebra libraries). Static deployment
+  storage is laid out with each member's alignment, and the configuration
+  arena and block pools take an alignment argument.
+- `rtt3::port_data` accepts over-aligned types. A compile-time check
+  rejects a type whose alignment exceeds what a given channel or pool was
+  built for, instead of producing a misaligned object.
+- The wire encoding for the UDP bridge and the log encoder copy bytes and
+  make no alignment assumption about the destination buffer.
+
+**Layouts that vectorise.** For per-axis data the recommended form is a
+struct of fixed-size arrays (`std::array<double, N>` for positions, one
+for velocities, and so on), not an array of per-axis structs. The
+compiler can vectorise loops over it, and it is still plain port data.
+Reflection treats both forms alike. Repeated ports (4.4) are for wiring
+convenience; a block that processes all axes at once should take one
+array-valued port.
+
+**`std::simd`.** GCC 16 ships the C++26 data-parallel types as an
+experimental feature. They may be used inside blocks. They are not
+allowed in port data types or block signatures for now: their size and
+layout depend on the target's vector width, which would make a type differ
+between the x86-64 desktop and the ARM target and break the shared schema.
+A block converts to and from fixed-size arrays at its boundary. This is to
+be revisited once the feature is stable.
+
+**Per-thread floating-point state.** Each real-time thread sets its
+floating-point control state at start, from the deployment:
+
+- Subnormal numbers are flushed to zero by default on real-time threads
+  (the flush-to-zero and denormals-are-zero bits on x86-64, the flush-to
+  -zero bit on AArch64). Arithmetic on subnormals can be many times slower
+  on some processors, which shows up as latency spikes when a filter or
+  integrator decays towards zero. This is a numerical change, so it is a
+  stated default that a node can opt out of, and the simulator has to use
+  the same setting for results to match.
+- The rounding mode is set explicitly and floating-point exceptions are
+  masked, so behaviour does not depend on what the creating thread had.
+- The settings are part of the start-up report.
+
+**Instruction sets and builds.**
+
+- The target CPU is set in the toolchain file per machine class (4.3),
+  so the compiler can use the vector instructions the deployment hardware
+  has. One binary per machine class, not run-time dispatch, is the
+  default; it keeps code paths identical between test and production.
+- Where one binary must serve several CPUs, function multi-versioning is
+  permitted for individual blocks. Its resolvers run at load time, which
+  immediate binding (see "Priority inversion through file I/O") already
+  moves to start-up.
+- 512-bit vectors on x86-64 are off unless enabled deliberately: on some
+  processors they lower the clock frequency of the core for a while and
+  enlarge the register state saved at every context switch. The
+  benchmark suite reports context-switch cost with and without them.
+- On AArch64 the baseline is NEON. Scalable vectors are not used in port
+  data, for the same reason as `std::simd`.
+
+**Same numbers in the simulator and on the target.** Portable blocks
+(4.4) are meant to give the same results in both places. SIMD and
+floating-point code generation is where that most easily fails:
+
+- Fused multiply-add contraction is the commonest cause of differing
+  results between x86-64 and AArch64 builds. The block package builds
+  with contraction set explicitly (`-ffp-contract=off` for reproducible
+  blocks, or on everywhere), never left to the compiler's per-target
+  default.
+- No fast-math options for blocks that must match. They let the compiler
+  reorder operations differently per vector width.
+- A vectorised reduction (a sum or dot product) adds in a different order
+  from the scalar loop, so a block that must match bit for bit states its
+  summation order or is compared with a tolerance.
+- Blocks are therefore classed as **exact** (bit-identical across
+  machines, built with the reproducible settings, checked by replaying
+  recorded inputs on both architectures) or **tolerant** (compared within
+  a stated bound). The class is an annotation on the block and part of its
+  description.
+- Mathematical library functions (`sin`, `exp`) are not guaranteed to
+  round identically across library versions and architectures; an exact
+  block that needs them uses an implementation shipped with the block
+  package.
+
+**Checking it.** Replay tests run each exact block on recorded inputs on
+x86-64 and AArch64 and compare outputs bit for bit. The benchmark suite
+includes a block over array data built with and without vectorisation, so
+a lost vectorisation shows as a regression.
+
 ## 5. Phasing
 
 Each phase ends with tests green on x86-64 and AArch64.
@@ -1710,3 +1807,8 @@ on questions 2 and 3; phase 6 on questions 1, 4 and 10.
     - Is a single-process closed-loop test (controller plus MuJoCo plant
       block, stepped in lock) wanted for CI?
     - Does the simulator already have subsystems?
+20. **SIMD and numerical reproducibility**: do results have to match bit
+    for bit between the simulator and the target, or within a tolerance?
+    Is flushing subnormals to zero on real-time threads acceptable as the
+    default? Do port data types today contain vector types from a
+    linear-algebra library, and which one?

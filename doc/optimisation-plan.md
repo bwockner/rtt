@@ -413,6 +413,23 @@ fixes.
 | F1 | `meyerj/fix_deadlock_in_concurrent_connection_disconnection` | Finer-grained locking in `ConnectionManager` and the multiple-outputs channel element, with a test; the last commit is marked work in progress. Merges cleanly, touches 21 files |
 | not listed | `master-file-descriptor-activity-locking-and-robustness` | Removes a mutex from `FileDescriptorActivity::trigger()`. Conflicts with the later rework of that class already on `master` |
 
+SIMD and floating point, in particular:
+
+- **Over-aligned types and the real-time allocator.** TLSF aligns blocks
+  to twice the pointer size, 16 bytes on 64-bit targets
+  (`rtt/os/tlsf/tlsf.c:138`). A type that needs 32-byte alignment, such as
+  a fixed-size vector type built for AVX, is not guaranteed that alignment
+  when allocated through `rt_allocator`. Check any such types used with
+  real-time strings, containers or `send`.
+- **Subnormal numbers** can make a control loop's execution time jump
+  when a filter state decays towards zero. Setting flush-to-zero at the
+  start of each real-time thread (in the component's `startHook` or
+  `configureHook`, since it is per-thread state) removes that; it changes
+  results slightly and must match the simulator.
+- **Build flags** are not set by RTT; components choose their own. Keep
+  floating-point contraction and fast-math settings the same for code
+  that must agree between the desktop and the ARM target.
+
 ## 4. Order of work
 
 | Step | Items | ABI effect | Why this order |

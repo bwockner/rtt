@@ -79,6 +79,11 @@ first.
 - **Ports**: which parts of port set-up cost the most today? Latched
   inputs and port groups are the first candidates to cut if scope is
   tight. [M17]
+- **SIMD and numerical reproducibility**: must results match bit for bit
+  between the simulator and the target, or within a tolerance? Is
+  flushing subnormals to zero on real-time threads acceptable as the
+  default? Do port data types contain vector types from a linear-algebra
+  library? [M20]
 - **Inter-process transport**: any transport in scope beyond the UDP
   bridge, or single-process with bridges as components? [M4]
 - **ABI stability** for separately built component libraries. [M8]
