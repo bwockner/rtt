@@ -29,6 +29,7 @@ remain in the tree.
 | `doc/rtt3/logging.md` | The lock-free logger for `rtt3` |
 | `doc/rtt3/compile-time.md` | What is computed or checked at compile time, and the limits |
 | `doc/rtt3/estimation.md` | The estimator and calibration built on the framework: state reduction, sensor noise models, factor graph |
+| `doc/rtt3/calibration-data.md` | Data model for calibration observations and their invalidation |
 | `doc/rtt3/numerics.md` | SIMD, alignment, floating-point settings, comparing results with the simulator |
 | `doc/optimisation-plan.md` | Findings in the RTT 2.x code and the order to fix them |
 | `doc/open-questions.md` | Everything not yet decided, the licence position, and what was assumed without verification |

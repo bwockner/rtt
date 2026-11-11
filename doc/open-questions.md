@@ -135,6 +135,10 @@ first.
   equipment can be assumed in the field and which parameters change
   there. See
   `rtt3/estimation.md`. [M24]
+- **Calibration data model**: whether the record types are shared with
+  the simulator, the file format, how manual observations are entered,
+  what the total station exports, and who may invalidate an observation.
+  See `rtt3/calibration-data.md`.
 - **Generated kinematics**: SymForce is planned for closed-form
   kinematics. Which version, is generated code checked in or regenerated,
   which calculations stay on KDL, and what tolerance defines

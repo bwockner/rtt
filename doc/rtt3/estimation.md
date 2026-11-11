@@ -2114,7 +2114,8 @@ next most informative observation, which keeps a session short. The same
 analysis shows which conventions still have to be imposed, if any,
 after the external observations are included.
 
-*Data handling.* The observations, the static pose recordings, the
+*Data handling.* The data model for these records is in
+`calibration-data.md`. The observations, the static pose recordings, the
 instrument set-ups and the result are stored together as one calibration
 record per machine, so that a calibration can be reproduced, extended
 with later observations, or re-solved when the model changes.
