@@ -339,6 +339,97 @@ the filter's consistency checked in simulation, not assumed.
 The UD measurement update is naturally sequential and combines with
 option 3.
 
+### Single precision with a factored covariance
+
+The idea of factorising so that the filter fits 32-bit lanes without
+losing precision is sound, with two qualifications: which factorisation,
+and which part of the filter the precision argument covers.
+
+**Which factorisation.** For a covariance the right one is the symmetric
+form of LU: `P = U D Uᵀ` with unit-triangular U and diagonal D (or
+equivalently `L D Lᵀ`), or the Cholesky factor. A general LU
+factorisation with pivoting is not suitable for carrying the covariance:
+it does not preserve symmetry or positive definiteness, and it gives no
+precision benefit. For solving with a sensor's innovation covariance the
+same holds; Cholesky or `L D Lᵀ`, not general LU.
+
+**Why it recovers the precision.** A conventional filter squares the
+dynamic range of the problem: the condition number of P is the square of
+that of its factor. Single precision carries about seven decimal digits,
+so a conventional covariance recursion starts to fail when the ratio
+between the best and worst known directions approaches what seven digits
+can hold. Working on the factor halves the exponent, which is why a
+factored filter in single precision behaves, for the covariance and the
+gain, about as well as a conventional one in double.
+
+**What the argument does not cover: the state and the residual.** The
+factor only protects the covariance arithmetic. The state vector and the
+innovation `z - h(x)` are still limited by seven digits if they are held
+in single precision. A position of a kilometre is then resolved to about
+a tenth of a millimetre, and subtracting two nearly equal large numbers
+to form a residual can lose most of the remaining digits. This, not the
+covariance, is usually where single precision actually hurts.
+
+**So: mixed precision.** The parts split cleanly by cost.
+
+| Part | Work per step | Precision |
+|---|---|---|
+| Nominal state, prediction of the state, measurement prediction and residual | Proportional to the state size: a few scalar operations | Double |
+| Covariance factor, its propagation, gains | Proportional to the square or cube of the state size: the bulk | Single |
+
+- An error-state formulation makes the split natural: the nominal state
+  is held and propagated in double, the filter estimates a small
+  deviation, and only the deviation's covariance factor and the gains are
+  single precision. The residual is formed in double and converted.
+- Scale the error states so that their standard deviations are of
+  comparable magnitude. This improves conditioning in any precision and
+  costs nothing at run time when the scaling is part of the symbolic
+  model.
+- Keep coordinates relative to a local origin where large offsets would
+  otherwise eat digits.
+
+**Which factored form.**
+
+- *UD (Bierman and Thornton).* No square roots. The measurement update
+  is scalar and sequential, taking each measurement's variance directly,
+  which matches the per-sensor structure above. The time update is a
+  weighted Gram-Schmidt procedure that is inherently sequential, so it
+  vectorises less well than a plain product.
+- *Cholesky factor with a QR-based time update.* More regular
+  arithmetic, which suits vector code better; needs square roots, which
+  are a single cheap instruction on both target architectures.
+- Either way, the sparsity of the transition Jacobian is still used: the
+  product of the Jacobian with the factor is generated from the symbolic
+  model, and only the re-triangularisation is generic.
+
+**How much speed to expect.** Single precision doubles the values per
+vector register (four instead of two with NEON, eight instead of four
+with AVX2) and halves the memory touched. For large dense blocks that
+approaches a factor of two. For a filter with few states, where the
+generated code is mostly scalar and already sparse, the gain can be much
+smaller, and a factored time update costs somewhat more than the
+conventional product it replaces. Whether the change pays for itself is
+a measurement, not a given; the benchmark compares the conventional
+double filter, the factored double filter and the mixed-precision
+factored filter on the target.
+
+**Hazards particular to single precision.**
+
+- *Underflow.* Variances are squares of small numbers, and with
+  subnormals flushed to zero (see "Per-thread floating-point state") a
+  very small entry of D becomes exactly zero and is later divided by. A
+  floor on the diagonal, and the state scaling above, prevent it.
+- *Cancellation in the residual*, addressed by forming it in double.
+- *Accumulated drift over long runs.* Single precision errors are larger,
+  so the comparison with the reference must include long recordings and
+  the worst-conditioned phases: start-up with a large initial
+  covariance, very accurate sensors, long periods without a measurement.
+
+**Acceptance.** The mixed-precision filter replaces the double one only
+if, on recorded data and in simulation, its state and reconstructed
+covariance stay within the agreed tolerance of the double reference and
+its consistency statistics are unchanged.
+
 ### Applied to the case at hand: an EKF with per-sensor varying covariance
 
 The filter in question is an extended Kalman filter in which each
@@ -557,8 +648,10 @@ a build with every fast-math option on.
   How many states, how many sensors and of what dimension each? Is each
   sensor's own noise uncorrelated between its components? Should sensors
   be re-linearised between updates? Is the covariance used downstream?
-- Is single precision acceptable for any filter if a square-root form
-  makes it numerically safe?
+- Mixed precision (double nominal state and residual, single-precision
+  covariance factor) is the proposed way to use 32-bit lanes. What are
+  the magnitudes and required resolutions of the states, and how long
+  does the filter run without a reset? Those decide whether it is safe.
 - Is there any cross-checking between two computers, or any checksum over
   computed values, that would need identical results?
 - `std::simd` in GCC 16 is experimental and unverified here, like the

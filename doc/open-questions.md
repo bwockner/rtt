@@ -101,8 +101,9 @@ first.
   covariance. Still open: number of states, number and dimension of
   sensors, whether each sensor's noise is uncorrelated between its
   components, whether to re-linearise between sensor updates, whether the
-  covariance is used downstream, and whether single precision is
-  acceptable with a square-root form. See `rtt3/numerics.md`.
+  covariance is used downstream, and the state magnitudes, required
+  resolutions and run length that decide whether a mixed-precision
+  factored form is safe. See `rtt3/numerics.md`.
 - **Generated kinematics**: SymForce is planned for closed-form
   kinematics. Which version, is generated code checked in or regenerated,
   which calculations stay on KDL, and what tolerance defines
