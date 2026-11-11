@@ -590,6 +590,73 @@ compile.
   observation, 4.6) can be replayed through it offline and the outputs
   compared, with no framework and no simulator running.
 
+**One block definition for two graph engines.** The simulator is itself a
+C++ block graph in the Simulink style, built with GCC, with blocks over
+plain structs and MuJoCo as the physics backend. That makes the two
+systems structurally alike: both execute a graph of blocks connected by
+typed signals. The plan therefore puts the part that understands a block
+into the neutral package, not into `rtt3`:
+
+- `blk::describe<^^pid_step>` yields a constant table for a block: its
+  inputs, outputs, state type, parameter type and time-step parameter,
+  with names, types, units and documentation. It is produced by reflection
+  and depends on nothing but the standard library.
+- `rtt3::function_node` is built on that table. The simulator can build
+  its own graph nodes from the same table with a small adapter of its
+  own, instead of declaring each block's ports a second time.
+- A block library then has exactly one description of each block, and it
+  lives next to the function.
+
+This needs the simulator to be built with GCC 16 in C++26 mode (open
+question 19). If it stays on an older GCC, it can still call the functions
+directly; only the generated description is unavailable to it.
+
+**Same execution semantics inside a thread.** For a block to behave
+identically in both places, the two graphs must agree on when a block sees
+its inputs. Inside one `rtt3` thread the rules are those of a synchronous
+block diagram, stated here as part of the design, not left as an
+implementation detail:
+
+- blocks run once per step in topological order of the links;
+- a block sees the outputs its upstream blocks produced in the same step;
+- a cycle must contain a link marked as a delay, which delivers the value
+  from the previous step and has a declared initial value;
+- blocks at a slower harmonic rate run on every n-th step, and links
+  between rates are either a hold (slow to fast) or a declared delay
+  (fast to slow), never an unspecified sampling.
+
+Links between different threads are different: the reader samples the
+latest value at whatever moment it runs, which no fixed-step simulator
+reproduces exactly. So a group of blocks that must match the simulator
+step for step is kept within one thread, and links that cross threads are
+the places where small timing differences between simulation and the real
+system are to be expected.
+
+**Subsystems.** A group of blocks with the links between them and a set
+of boundary ports is written as a struct, in the same form as a deployment
+(4.5) but using only `blk` types. `rtt3` embeds it as a nested part of a
+deployment, flattened into the surrounding thread; the simulator can
+instantiate the same struct as a subsystem. Moving a whole controller, or
+a whole plant model, between the two is then moving one type.
+
+**MuJoCo.** The physics stays behind a block boundary. Its interface is
+arrays inside a large state object, not typed arguments, so it is not
+wrapped automatically; one hand-written plant block maps typed inputs to
+actuator controls and sensor data to typed outputs. Two ways to use it:
+
+- *In the simulator process*, as today, with the controller reached
+  through substituted links over UDP.
+- *In the controller process*, for automated tests: the plant block
+  occupies the hardware slots, runs in a non-real-time thread, and the
+  simulated clock advances both in lock step. That gives a deterministic,
+  faster-than-real-time closed-loop test with no network and no second
+  process, suitable for CI.
+
+The plant block belongs with the simulator's code, not in `rtt3`; the
+plan only makes sure such a block can be placed in a slot. Statements
+about MuJoCo's interface here are from general knowledge of the library
+and were not checked against its headers.
+
 **Shared types across the UDP link.** The same type definitions are used
 on both sides of a substituted link. The wire encoding and schema hash are
 generated from the type, and the encoder and decoder are available as a
@@ -1599,14 +1666,19 @@ on questions 2 and 3; phase 6 on questions 1, 4 and 10.
     your own components, or mainly from the deployer, scripts and tools?
     Do you change properties while components are running? Do you use
     attributes or constants separately from properties?
-19. **Portable functions and the simulator**:
-    - What is the simulator written in and built with? If it cannot be
-      built with GCC 16, annotations in shared headers will not compile
-      there, and the hints have to be given where the function is wrapped
-      instead (as for C).
-    - Does the simulator call functions in-process at its own time step,
-      or only exchange data over UDP today?
-    - Do the functions you want to move currently depend on Orocos types
-      (ports, properties, `TaskContext`), or are they already plain
-      functions over plain structs?
-    - Is state usually a struct passed in, a class, or globals?
+19. **Portable functions and the simulator**: the simulator is C++ built
+    with GCC, a Simulink-style block graph over plain structs with MuJoCo
+    as the physics backend (answered). Remaining points:
+    - Which GCC version builds the simulator, and can it move to GCC 16
+      in C++26 mode? That decides whether it can share annotated headers
+      and the generated block descriptions.
+    - How is a block defined in the simulator today (a struct with a step
+      function, a free function, registration by name), and how are its
+      ports declared? The neutral block description should be shaped so
+      that existing blocks fit with little change.
+    - What are the simulator's execution rules: fixed step, multi-rate,
+      how are loops broken? The in-thread rules in 4.4 should match them.
+    - Is a single-process closed-loop test (controller plus MuJoCo plant
+      block, stepped in lock) wanted for CI?
+    - Are subsystems (a group of blocks moved as one unit) something the
+      simulator already has?
