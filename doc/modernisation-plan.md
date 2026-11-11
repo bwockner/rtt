@@ -983,6 +983,85 @@ unmapping elsewhere in the process.
 - The benchmark suite records system calls per cycle per thread and fails
   when the count rises.
 
+#### Priority inversion through file I/O
+
+Priority inheritance bounds the wait for a lock only if the holder can
+make progress when boosted. A thread that is waiting for a disk, a full
+pipe or a slow console cannot, so any lock it holds meanwhile blocks a
+real-time waiter for as long as the device takes. File I/O reaches
+real-time threads by four routes, and each is closed separately.
+
+**1. Direct I/O from a real-time thread.** A `write` or `read` on a file
+can block inside the kernel on journal commits, writeback throttling or a
+lock on the file held by another thread.
+
+- Real-time threads perform no file operations after start: no `open`,
+  `close`, `read`, `write`, `fsync` or `stat`, and nothing on standard
+  output or standard error. The only descriptors they may touch are device
+  descriptors a driver node has registered.
+- This is enforced by the per-thread system call filter in strict test
+  mode (see above).
+
+**2. A lock shared with a thread that does I/O.** This is the common case
+in practice: a logger or recorder holds a mutex while writing, and a
+real-time thread waits for that mutex.
+
+- Design invariant: **a real-time thread shares no lock with any thread
+  that performs I/O.** All hand-over between the two goes through bounded
+  lock-free rings: log records, observed port samples, property snapshots
+  to be saved, recorded data.
+- A full ring never blocks the real-time side. The record is dropped and a
+  per-ring drop counter is incremented; the counters are visible through
+  the inspection service, so loss is reported, not hidden.
+- The library has two mutex types, one for configuration and inspection
+  code and none usable on the update path. In debug builds a helper thread
+  entering an I/O call while holding any library mutex is reported, and so
+  is any lock taken by a thread marked real-time.
+- Standard I/O streams have their own internal locks, so they fall under
+  the same rule: only helper threads use them.
+
+**3. I/O hidden behind memory access.** A page fault on memory backed by a
+file is a disk read, taken while holding the process's memory-map lock,
+which every other faulting or mapping thread also needs.
+
+- All memory, including program text and shared libraries, is locked and
+  resident before the first cycle.
+- Executables are linked with immediate binding (`-z now`) so that no
+  symbol is resolved lazily on first call, which would take the dynamic
+  loader's lock and may touch disk. Static linking, the default for
+  deployments, removes most of this.
+- No library is loaded after start. Component libraries for loaded slot
+  alternatives are opened during configuration, and their thread-local
+  storage is touched by each thread at thread start.
+- Helper threads do not map or unmap memory after start either, so they
+  never hold the memory-map lock for long.
+- Shared memory, if used, is backed by memory and prefaulted, never by a
+  file on disk.
+
+**4. I/O that is the component's job.** Drivers must talk to devices.
+
+- A driver that performs blocking device I/O runs as its own node with its
+  own thread at a priority chosen for that device, and exchanges data with
+  control nodes through links. The control thread then shares neither a
+  lock nor a call path with the device.
+- The start-up report lists, for each registered device descriptor, the
+  thread that uses it, so a control thread that ends up doing device I/O
+  is visible.
+
+**Services that replace I/O in components.** Because components may not
+write files themselves, the runtime layer provides the usual needs as
+helper-thread services fed by rings: logging, recording of observed ports
+to disk, and saving property snapshots. Configuration and property files
+are read before start. Saving properties at run time takes a consistent
+snapshot on the real-time side (a copy into a ring) and writes it from the
+helper.
+
+**Helper thread hygiene.** Helpers run at normal priority on non-isolated
+cores. Console output is written without blocking and dropped when the
+console cannot keep up, since a serial console can stall a writer for
+milliseconds. Log files are best placed on a device that the control
+process does not otherwise depend on.
+
 ## 5. Phasing
 
 Each phase ends with tests green on x86-64 and AArch64.

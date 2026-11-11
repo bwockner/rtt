@@ -121,6 +121,37 @@ it is not (`rtt/os/oro_malloc.h:54`).
   statistics to find the right size. Document this.
 - ABI: none.
 
+**D6. The logger holds its global lock while writing to the console and
+to the log file.** `logit` takes `inpguard` and, still holding it, writes
+the line to standard output and to the file sink
+(`rtt/Logger.cpp:183-200`). Every `log() << ...` from any thread takes the
+same lock (D3). If a low-priority thread is in the middle of that write
+and the console or disk is slow, a real-time thread that logs anything, or
+enters a `Logger::In` scope, waits for the device. Priority inheritance
+(D1) does not help, because the holder is waiting for I/O, not for the
+CPU.
+
+- Change: format the line under the lock into a local buffer, release the
+  lock, then write. Per-line ordering between threads can then differ
+  slightly from lock order; lines stay whole. Together with the level
+  check before locking (D3), a real-time thread that logs nothing never
+  touches the lock at all.
+- A further step, still without API change, is to hand finished lines to a
+  writer thread through the lock-free buffer the logger already has for
+  remote logging (`Logger.cpp:223`), so that no caller ever performs the
+  write. This changes when output appears and what is lost on a crash, so
+  it goes behind an option.
+- ABI: none.
+
+**D7. Lazy symbol binding.** Nothing in the build requests immediate
+binding, so the first call to each library function from a real-time
+thread resolves the symbol under the dynamic loader's lock and may fault
+in pages from disk.
+
+- Change: link RTT and, through `UseOROCOS-RTT.cmake`, components and
+  executables with `-Wl,-z,now`. Start-up becomes slightly slower.
+- ABI: none.
+
 ### 3.2 Data-flow path (highest value for throughput)
 
 A write followed by a read passes through a chain of channel elements.
@@ -311,13 +342,28 @@ System calls and allocation, in particular:
   the `SendHandle` pattern sparingly, or use a port instead of an
   operation for high-rate data.
 
+File I/O and priority inversion, in particular:
+
+- **No file or console output from a real-time component.** Until D6 is
+  in, that includes logging at any level that is written. Route data to be
+  stored through a buffered port to a non-real-time component that does
+  the writing.
+- **Reporting and marshalling components** write files in their own
+  thread; give them a non-real-time activity and connect them with
+  buffered, lock-free connections, never with a locked policy.
+- **Do not share a mutex** between a real-time component and anything
+  that performs I/O, including through an operation that the I/O
+  component calls while holding its own lock.
+- **Avoid a serial console** as the destination of standard output on the
+  target; redirect it to a file or to memory.
+
 ## 4. Order of work
 
 | Step | Items | ABI effect | Why this order |
 |---|---|---|---|
 | 0 | Benchmarks and baseline | none | Everything else is judged against it |
 | 1 | B1, B2, B3, B4 | none | No code change; immediately reversible |
-| 2 | D1, D2, D4, D5 | none | Largest determinism gain; library-only or configuration-only changes |
+| 2 | D1, D2, D4, D5, D6, D7 | none | Largest determinism gain; library-only or configuration-only changes |
 | 3 | D3 | recompile | Removes a process-wide lock from real-time paths |
 | 4 | F3, F4, F1 step 1, F2 | recompile | Mechanical; together they remove most per-hop overhead |
 | 5 | F5, E2 (code part) | recompile | Depends on measurements from step 4, mainly on ARM |
