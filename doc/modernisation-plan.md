@@ -299,6 +299,100 @@ struct Controller {
 - Properties are annotated data members. Reading
   and writing them from a file is an `rtt3-reflect` feature.
 
+#### Port declaration without boilerplate
+
+In RTT 2.x one port is written in up to five places:
+
+```cpp
+class Controller : public RTT::TaskContext {
+    RTT::InputPort<JointState>    state_port_;                    // 1. member
+    RTT::OutputPort<JointCommand> command_port_;
+    JointState state_;                                            // 2. storage for the value read
+public:
+    Controller(const std::string& name)
+        : TaskContext(name),
+          state_port_("state"), command_port_("command")          // 3. name
+    {
+        ports()->addEventPort(state_port_).doc("Measured state"); // 4. registration, doc, event
+        ports()->addPort(command_port_).doc("Commanded torque");
+    }
+    bool configureHook() {
+        command_port_.setDataSample(JointCommand(7));             // 5. data sample
+        return state_port_.connected();                           //    connection check
+    }
+};
+```
+
+In `rtt3` the declaration is the only place. Each item above has one
+replacement, and none of them is a statement in a constructor or hook:
+
+| RTT 2.x | `rtt3` |
+|---|---|
+| Name string in the constructor | The member's identifier, by reflection; `[[=rtt3::name("...")]]` only to override |
+| `addPort` / `addEventPort` call | Nothing: being a public port member is the registration |
+| `.doc("...")` | `[[=rtt3::doc("...")]]` on the member |
+| Event port and callback | `[[=rtt3::event]]` on the port; the handler is a member function annotated with the port it handles |
+| `setDataSample` in `configureHook` | A default member initialiser: `rtt3::output_port<Path> path{rtt3::sample(Path(64))};`, or nothing at all for bounded types |
+| Connection check in `configureHook` | Inputs are required by default and checked when the deployment is built; `[[=rtt3::optional]]` to relax |
+| Separate member to hold the last value read | `rtt3::latched_input<T>`: keeps the latest sample, `state.get()` returns it and `state.fresh()` says whether it changed this cycle |
+| Connection policy passed at connect time | Default policy as an annotation on the port, overridable on the link |
+| Constructor taking a name | None; a component is an aggregate and the node name comes from the deployment member |
+
+The same component:
+
+```cpp
+struct Controller {
+    [[=rtt3::doc("Measured state")]]   rtt3::latched_input<JointState> state;
+    [[=rtt3::doc("Commanded torque")]] rtt3::output_port<JointCommand> command;
+
+    void update() noexcept { command.write(law(state.get())); }
+};
+```
+
+**Event handlers** are annotated on the function, not on the port, because
+the function is declared after the port it refers to:
+
+```cpp
+[[=rtt3::event]] rtt3::input_port<JointCommand> command_in;
+
+[[=rtt3::handles(&Driver::command_in)]]
+void on_command(const JointCommand& c) noexcept;
+```
+
+The signature is checked against the port's value type at compile time.
+
+**Repeated ports.** A `std::array` of ports is reflected as indexed ports
+(`axis[0]`, `axis[1]`, ...), and links can address one element or connect
+two arrays of equal size element by element.
+
+**Port groups.** A set of ports that always travels together is a struct
+used as a member; its ports are named with the member as prefix
+(`drive.command`, `drive.state`). Writing the group once as a template
+over a role gives both sides from one definition, so the two ends cannot
+drift apart:
+
+```cpp
+template <class Role>
+struct DriveIo {
+    typename Role::template out<JointCommand> command;
+    typename Role::template in<JointState>    state;
+};
+
+struct Controller { DriveIo<rtt3::requires_> drive; ... };   // writes command, reads state
+struct Drive      { DriveIo<rtt3::provides>  io;    ... };   // reads command, writes state
+
+// one link connects every port of the group
+rtt3::link(&App::ctrl, &Controller::drive, &App::left, &Drive::io)
+```
+
+A group is also what a slot (4.5) checks its alternatives against, and
+what link substitution cuts as a unit.
+
+**Derived defaults.** A port with no annotation at all is valid: its name
+is the identifier, it is required if it is an input, its policy is the
+latest-value policy, and its documentation is empty. Annotations are only
+for departures from that.
+
 #### Data types: composition, inheritance and link adaptors
 
 RTT 2.x requires the two ports of a connection to have exactly the same
@@ -1267,3 +1361,7 @@ on questions 2 and 3; phase 6 on questions 1, 4 and 10.
     Is connecting a member of a composite to a port (projection), or
     connecting types from different libraries by structure, something you
     need, or is exact type match enough?
+17. **Ports**: which parts of port set-up cost you the most today (naming
+    and registration, event callbacks, data samples, repeated ports per
+    axis, keeping two components' matching ports in step)? That decides
+    which of the conveniences in 4.4 belong in the first version.
