@@ -728,6 +728,90 @@ the test framework's assertion macros in tests. CI fails on any new
 - Rule for all code reachable from `update()`: no allocation, no blocking
   without priority inheritance, no exceptions, no `std::string` construction.
 
+#### Cache behaviour
+
+A cache line is invalidated on one core whenever another core writes to
+it. In RTT 2.x this happens on almost every port operation: readers
+increment a counter inside the data object the writer is filling, every
+hop copies a reference-counted pointer, and unrelated fields share lines.
+The strategies below are ordered by how much they remove.
+
+**1. Do not share at all.** When the deployment folds two nodes into one
+thread (4.5), the link between them is a plain variable with no atomics.
+The data is written and read on the same core, in execution order, so it
+is still in the first-level cache when the consumer runs. This is the
+largest single gain and it follows from the scheduling fold, not from any
+tuning.
+
+**2. Readers that do not write.** For links that do cross threads, choose
+channel algorithms in which the reading side stores nothing into memory
+the writer uses:
+
+| Link shape | Channel | Cross-core writes per operation |
+|---|---|---|
+| One writer, one reader, latest value | Triple buffer: each side owns a slot, one atomic exchange swaps in the spare | One shared word |
+| One writer, many readers, latest value, `trivial_data` | Sequence lock: writer bumps a counter, readers only load and retry | None from readers |
+| One writer, one reader, queue | Ring with separate head and tail, each side caching the other's index | One shared word, and only when the cached index runs out |
+| Several writers | Multi-writer queue as today | Inherent contention; used only where the graph requires it |
+
+The sequence lock is not wait-free for readers, so it is selected only
+where the reader's retry is bounded by the writer's period; the triple
+buffer is wait-free on both sides. The deployment picks the channel from
+the link graph, so the common shapes never pay for the general one.
+
+**3. No reference counting or shared bookkeeping on the data path.**
+Channels in a static deployment live as long as the process, so there are
+no smart-pointer copies per operation. Per-node statistics (cycle and
+trigger counts) are written only by the owning thread and read by the
+inspection service without synchronisation beyond an atomic load.
+
+**4. Layout by owner.** Within a channel, fields written by the producer
+and fields written by the consumer are on different cache lines, each
+aligned to the project's cache-line constant (4.3). Across the deployment,
+the compiler knows which thread owns each node and each channel end, so
+the deployment's storage is arranged per thread: everything one thread
+writes is contiguous, with a line boundary before the next thread's data.
+Components are not interleaved in declaration order as they would be in a
+hand-written struct.
+
+**5. Separate read-mostly from write-often.** Flags that are read on every
+operation but almost never change (observer enabled, link substituted,
+lifecycle state) are grouped on lines that hold no frequently written
+data, so checking them never misses because of a neighbour.
+
+**6. Copy less.** Samples are copied once per link, not twice: there is no
+"last written value" copy unless a link asks for it. For large samples a
+loan interface lets the writer fill a channel slot in place and publish it
+(`auto s = port.loan(); ...; s.publish();`), and the reader of a triple
+buffer reads in place. Member projection (4.4) sends only the part that is
+needed. Draining a queue reads all available samples with one index update.
+
+**7. Keep threads where their data is.** Thread affinity is part of the
+machine file. Recommended practice, checked by the start-up report: pin
+real-time threads, isolate their cores, and place threads that exchange
+data at a high rate on the same core or on cores that share a cache level.
+A migrated thread starts with a cold cache, so unpinned real-time threads
+are reported as a warning.
+
+**8. Hot and cold code and data.** Lifecycle handling, error paths and
+configuration are kept out of line and marked cold, so the update path of
+a folded thread is one compact region of code. Names and descriptions are
+in read-only storage away from the data path. Deployment storage is
+locked, prefaulted and can optionally be backed by huge pages to reduce
+address-translation misses.
+
+**9. Inspection and simulation stay off the hot lines.** Port observers
+and the UDP bridge copy into their own single-producer rings laid out as
+in point 4, and their threads run on a non-isolated core.
+
+**Checking it.** The layout rules are enforced at compile time: library
+types annotate which side owns each field, and a reflection-based check
+fails the build if fields of different owners share a cache line. At run
+time, the benchmark suite records cache-miss counts alongside latency, and
+`perf c2c` is used on x86-64 to find remaining shared lines (on ARM the
+equivalent needs the statistical profiling extension, so that analysis is
+done on the desktop and confirmed by timing on the target).
+
 ## 5. Phasing
 
 Each phase ends with tests green on x86-64 and AArch64.
