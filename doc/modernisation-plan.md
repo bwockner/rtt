@@ -352,7 +352,7 @@ struct App {
     [[=rtt3::periodic(1ms), =rtt3::priority(79)]] Controller ctrl;
 
     [[=rtt3::triggered_by<&rtt3::slot_port::command_in>]]
-    rtt3::slot<EthercatDrive, CanDrive> drive;                  // exactly one is active, or a mock of one
+    rtt3::slot<EthercatDrive, CanDrive> drive;                  // exactly one is active
 
     rtt3::slot<ScaraKinematics, GantryKinematics> kinematics;
 
@@ -377,15 +377,24 @@ int main(int argc, char** argv) { return rtt3::run<App>(rtt3::machine_file(argv[
 - Storage is sized for the largest alternative, so there is still no
   allocation. The cost is one indirect call per slot per cycle, instead of
   an inlined call; links between fixed nodes are unaffected.
-- Hardware simulation is selected by the same file. Today a deployer
-  extension injects a mocked component that mimics the real component's
-  ports and maps them to UDP ports on the device, where the simulator
-  talks to them. `rtt3` keeps that model as a built-in: any slot can be
-  filled with `rtt3::mock`, a stand-in that reflection gives the same
-  ports (names, directions, value types) as the alternative it replaces,
-  with no behaviour of its own. The machine file says which alternative is
-  mocked and how its ports map to UDP endpoints (4.6). No mock has to be
-  written or kept in step with the real component by hand.
+- Hardware simulation is selected by the same file, at the level of
+  connections, as the deployer extension does today: the real source or
+  sink of a port is disconnected and a UDP-backed port is connected in its
+  place. In `rtt3` this is *link substitution*:
+  - a link, or all links of a node, is declared substitutable in the
+    deployment (`rtt3::substitutable`), so the set of places where
+    simulation may cut in is fixed and visible at compile time;
+  - the machine file may then replace either end of such a link with a UDP
+    endpoint (4.6). The component on the kept side is unchanged and
+    unaware of it;
+  - a node whose links have all been substituted can be marked disabled in
+    the machine file, so a hardware driver is neither configured nor
+    started when its hardware is absent;
+  - substitution is resolved once at start-up. A substitutable link costs
+    one indirection per port access; links not declared substitutable keep
+    the fully static path and cannot be redirected by any file or tool.
+
+  No mock components are needed, generated or hand-written.
 - Kinematic variation that is only a difference in parameters is a
   property set in the machine file, not a slot; a slot is for variants
   with different code.
@@ -441,27 +450,24 @@ interfaces.
   tool can tell whether a running system matches the description it loaded.
   Port identifiers are derived from the member path (`ctrl.command`) and
   stay stable across builds unless the member is renamed.
-- **Port access for external programs.** Three operations on a port, by
-  identifier, each with the value-type schema available for decoding:
-  - *observe*: receive samples written to an output port (inspection);
-  - *supply*: provide the samples an input port reads;
-  - *consume*: take the samples an output port writes.
-
-  Supply and consume exist only on the ports of `rtt3::mock` stand-ins
-  (4.5): the mock's outputs are supplied by the simulator and its inputs
-  are consumed by it. No link between real components can be redirected by
-  a tool. Observation uses an optional observer on any exposed output
-  port, checked with one atomic load per write, copying into a lock-free
-  buffer.
-- **UDP port bridge.** The transport for mocks is UDP, as today, so the
-  simulator can run on the device or on another host:
-  - each mocked port maps to a UDP endpoint; the mapping comes from the
-    machine file, with a deterministic default derived from the graph, and
-    is included in the exported graph so the simulator can read it instead
-    of having it configured twice;
+- **Port access for external programs.**
+  - *Observe*: receive samples written to an output port, through an
+    optional observer on any exposed output port, checked with one atomic
+    load per write and copying into a lock-free buffer. Read-only; for
+    inspection.
+  - *Substitute*: stand in for the source or sink of a substitutable link
+    (4.5), as selected by the machine file at start-up. For simulation.
+- **UDP port bridge.** Substituted link ends are served over UDP, as
+  today, so the simulator can run on the device or on another host:
+  - each substituted port maps to a UDP endpoint; the mapping comes from
+    the machine file, with a deterministic default derived from the graph,
+    and is included in the exported graph so the simulator can read it
+    instead of having it configured twice;
   - socket I/O runs on a bridge thread outside the real-time threads and
-    hands samples over through the lock-free buffers, so the control
-    threads make no system calls for simulation traffic;
+    hands samples over through lock-free buffers of the link's declared
+    policy, so control threads make no system calls for simulation traffic
+    and the kept component sees the same buffering behaviour as with the
+    real peer;
   - datagrams carry a sequence number and the graph hash, so loss,
     reordering and a simulator built against a different deployment are
     detected instead of silently producing wrong data;
@@ -471,13 +477,14 @@ interfaces.
   - value types larger than one datagram need a stated rule (reject at
     compile time, or fragment); the default is to reject.
 
-  A machine file that selects any mock makes the process report at
-  start-up that it is running against simulated hardware, and strict
-  deployment mode (4.3) refuses to start with mocks present, so a
+  The exported graph marks which links are substitutable, and the served
+  graph shows which are currently substituted and which nodes are
+  disabled, so the simulator and inspection programs see the system as it
+  actually runs. A machine file that substitutes any link makes the
+  process report at start-up that it is running against simulated I/O, and
+  strict deployment mode (4.3) refuses to start in that case, so a
   simulation configuration cannot end up driving a real machine unnoticed.
-  The same bridge can carry observed ports to the inspection programs; a
-  shared-memory transport for same-host tools is a later option, not part
-  of the first design.
+  The same bridge can carry observed ports to the inspection programs.
   Deployments that do not call `rtt3::reflect::expose` contain none of this.
 - **Control interface** on a local or TCP socket: lifecycle states, reading and
   writing properties, calling operations, and, where time is simulated,
@@ -645,9 +652,9 @@ Each phase ends with tests green on x86-64 and AArch64.
 | 1. OS layer | `rtt3::os`, memory locking, graceful downgrade, logger front end, simulated clock | Thread, timing and lock tests pass; wake-up latency measured on the ARM board |
 | 2. Lock-free primitives | Data object, buffers, queues, pool | Stress and model-checking tests pass on both architectures |
 | 3. Components and ports | `rtt3/meta/` component tables, `component` concept, ports, channels, policies, `connect`, activities, lifecycle, error type | Hand-wired example runs; port latency no worse than baseline |
-| 4. Static deployment | Deployment struct, slots and machine-file selection (minimal reader), graph model specification and `--graph` export, validation, scheduling fold, channel selection, `run` | Example system with a simulated and a real hardware alternative runs from one binary, with zero allocations after start-up and no string handling after configuration |
+| 4. Static deployment | Deployment struct, slots, substitutable links and machine-file selection (minimal reader), graph model specification and `--graph` export, validation, scheduling fold, channel selection, `run` | Example system with a simulated and a real hardware alternative runs from one binary, with zero allocations after start-up and no string handling after configuration |
 | 5. Operations and properties | Annotated operations and properties, typed callers, engine messages | Operation call cost no worse than baseline |
-| 6. Runtime layer | `rtt3-reflect`: full machine files and `--check`, names, served graph, mocks with the UDP port bridge, port observation, control interface, client library, reflected data-type descriptions, registrar and loader, `expose`, converter for deployer XML and `.cpf` | A simulator stand-in drives a mocked slot over UDP and an inspection client maps the graph and observes ports, both as separate processes; an RTT 2.x and an rtt3 component load into one process |
+| 6. Runtime layer | `rtt3-reflect`: full machine files and `--check`, names, served graph, link substitution with the UDP port bridge, port observation, control interface, client library, reflected data-type descriptions, registrar and loader, `expose`, converter for deployer XML and `.cpf` | A simulator stand-in drives substituted links over UDP with the hardware node disabled, and an inspection client maps the graph and observes ports, both as separate processes; an RTT 2.x and an rtt3 component load into one process |
 | 7. Release | Delete the old `rtt/` tree, migration guide with a worked port of a real component, API and ABI policy | Tagged 3.0 |
 
 Phases 1 and 2 do not depend on any open question. Phases 3 to 5 depend
@@ -716,19 +723,24 @@ on questions 2 and 3; phase 6 on questions 1, 4 and 10.
     - Is the set of sensor and actuator stacks closed when the software is
       built, or are stacks added in the field without a rebuild? This
       decides whether slots are enough or `rtt3::loaded` is essential.
-    - The simulator works through a deployer extension that injects mocks
-      and maps their ports to UDP (answered). What encoding does that
-      extension use on the wire, and must `rtt3` stay compatible with it
-      so the simulator runs unchanged?
+    - The simulator works through a deployer extension that disconnects a
+      port's real source or sink and connects a UDP-backed port instead
+      (answered). What happens to the disconnected hardware component
+      today: is it not loaded, loaded but not started, or left running?
+    - Is it acceptable to declare in the deployment which links may be
+      substituted, or must any link be substitutable from the file alone?
+      Declaring them keeps all other links fully static.
+    - What encoding does the extension use on the wire, and must `rtt3`
+      stay compatible with it so the simulator runs unchanged?
     - How are UDP port numbers assigned today: fixed per port in a file,
-      or computed? One UDP port per component port?
+      or computed?
     - Is simulated time stepped in lock with the controller, or does the
       simulator run in real time against the controller's own clock?
     - Do the inspection programs use the same UDP mechanism, or another
       route (task browser, CORBA)? Do they only read, or also write
       properties and call operations?
     - Is the deployer extension in a repository I can read? Its behaviour
-      would be the specification for the mock and bridge.
+      would be the specification for substitution and the bridge.
     - Roughly how many machine variants exist, and do deployer scripts
       (`.ops`) contain logic beyond loading, connecting and configuring?
 12. **Fallback mode**: decided. Reflection is required; there is no
