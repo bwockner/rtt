@@ -97,6 +97,10 @@ first.
   machine and could be fixed at build time? Is unit checking on links
   wanted? Are execution-time budgets known for existing components? See
   `rtt3/compile-time.md`. [M22]
+- **Filters**: state and measurement dimensions, time-varying or not,
+  diagonal measurement noise or not, measurement drop-outs, and whether
+  the covariance is used downstream. Is single precision acceptable
+  with a square-root form? See `rtt3/numerics.md`.
 - **Generated kinematics**: SymForce is planned for closed-form
   kinematics. Which version, is generated code checked in or regenerated,
   which calculations stay on KDL, and what tolerance defines

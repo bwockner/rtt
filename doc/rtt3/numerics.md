@@ -236,6 +236,129 @@ One Eigen version is pinned for both the simulator and the target and
 recorded in the block package, since alignment defaults and
 trivial-copyability of fixed-size types have changed between releases.
 
+## Kalman-style filtering: factorisation and structure
+
+Factorisation helps, but for the state sizes usual in control (a handful
+to a few tens of states) it is rarely the largest gain. The options
+below are ordered by how much work they typically remove. They are
+standard results from the estimation literature, stated from general
+knowledge; none has been measured on the code in question.
+
+### 1. Do not run the covariance recursion at all, where that is valid
+
+For a time-invariant model with constant noise covariances and every
+measurement present at every step, the covariance and the gain converge
+to constants. The steady-state gain can be computed once, during
+configuration, by solving the discrete Riccati equation (an iterative
+calculation, which is acceptable there). The run-time filter is then the
+state prediction and `x + K (z - H x)`: no covariance propagation, no
+factorisation, no matrix inverse. Many drive-level observers qualify.
+Where the model varies slowly with an operating point, a table of gains
+indexed by that point is the same idea.
+
+It does not apply when measurements drop out or arrive at varying rates,
+when the model is linearised about the current state, or when the
+covariance itself is consumed downstream.
+
+### 2. Exploit the structure of F and H in the propagation
+
+`P = F P Fᵀ + Q` is usually the most expensive line, and F is rarely
+dense: integrator chains, block structure between subsystems, identity
+blocks. H very often selects or differences a few states, so `H P Hᵀ` is
+a sub-block of P, not a product.
+
+- With a symbolic model (`blocks.md`, "Generated kinematics"), the
+  generator emits the propagation element by element, using the sparsity
+  of F and H, computing only one triangle of P, and sharing common
+  subexpressions. For filters of this size this is typically the biggest
+  single saving available, and it needs no factorisation.
+- Without generation, the same structure can be used by hand with block
+  operations, at the cost of the code complexity that generation avoids.
+- Subsystems that are not coupled through F, Q or H are separate, smaller
+  filters. Cost grows with the cube of the state size, so two filters of
+  half the size cost about a quarter.
+
+### 3. Sequential scalar updates in place of a matrix solve
+
+When the measurement noise covariance is diagonal, the measurement
+update can process one scalar measurement at a time. Each scalar update
+needs one division and work proportional to the square of the state
+size; no innovation covariance matrix is formed and nothing is
+factorised. Correlated measurement noise can be brought to this form by
+whitening with a factor of R that is computed once.
+
+This form suits a real-time system for reasons beyond speed:
+
+- a missing or rejected measurement is simply skipped, so a varying
+  number of valid measurements needs no dynamically sized matrices;
+- gating of outliers is a per-measurement comparison;
+- the operation count per measurement is fixed.
+
+### 4. When a matrix solve is needed, use the right factorisation
+
+- The innovation covariance is symmetric positive definite. Compute the
+  gain by a Cholesky factorisation and two triangular solves, never by an
+  explicit inverse. It costs roughly half of a general factorisation and
+  is better conditioned.
+- Plain Cholesky has no pivoting, so its operation count is fixed, which
+  matters for timing. A non-positive pivot means the matrix has lost
+  positive definiteness; that is reported as an error from the block, not
+  ignored.
+- Compute and store one triangle of symmetric matrices, and use
+  symmetric rank updates for the covariance, so that symmetry holds by
+  construction instead of being restored afterwards.
+- For very small measurement dimensions (up to three or four) a
+  closed-form, unrolled solve beats a general routine; generated code
+  produces this automatically.
+- Factor constant matrices once. Whitening factors of R and Q, for
+  parameters fixed at build time, can be compile-time constants
+  (`compile-time.md`); otherwise they are computed during configuration.
+- If measurements far outnumber states, the information form inverts a
+  matrix of the state size instead of the measurement size.
+
+All of this stays within fixed-size types with in-place factorisation, so
+there is no allocation.
+
+### 5. Square-root and UD forms
+
+Propagating a factor of the covariance (a Cholesky factor, or the UD
+form of Bierman and Thornton) instead of the covariance itself does not
+reduce the operation count much. What it buys:
+
+- the covariance is symmetric and positive semi-definite by construction,
+  with no symmetrisation or Joseph-form update needed;
+- roughly twice the effective numerical precision, since the factor has
+  the square root of the condition number.
+
+The second point is where a speed-up can come from: a square-root filter
+can often run in single precision where a conventional one needs double.
+On the ARM target that doubles the number of values per vector register
+and halves memory traffic. This is a design decision per filter and needs
+the filter's consistency checked in simulation, not assumed.
+
+The UD measurement update is naturally sequential and combines with
+option 3.
+
+### Suggested order of attack
+
+1. Check whether a steady-state or scheduled gain is valid.
+2. Generate the propagation from the symbolic model, using structure and
+   symmetry.
+3. Use sequential scalar updates where the measurement noise is, or can
+   be made, uncorrelated.
+4. Where a solve remains, use Cholesky on fixed-size types.
+5. Consider a square-root form if robustness is a problem or single
+   precision is wanted.
+
+### Checking a restructured filter
+
+A restructured filter is compared with the reference implementation on
+recorded data, state and covariance both, within tolerance. In
+simulation, where the true state is known, the usual consistency
+statistics (normalised estimation error and innovation) show whether the
+filter is still correctly tuned; a speed-up that makes the filter
+overconfident is not a gain.
+
 ## Agreement between the simulator and the target: within tolerance
 
 Decided: performance comes first, and the simulator and the real
@@ -366,6 +489,13 @@ a build with every fast-math option on.
   types kept for internal computation?
 - Is any Eigen code built with OpenMP or linked against an external BLAS
   today?
+- For the existing filters: how many states and measurements, is the
+  model time-varying or linearised about the state, is the measurement
+  noise diagonal, do measurements drop out, and is the covariance used
+  downstream? Those answers pick among the options under "Kalman-style
+  filtering".
+- Is single precision acceptable for any filter if a square-root form
+  makes it numerically safe?
 - Is there any cross-checking between two computers, or any checksum over
   computed values, that would need identical results?
 - `std::simd` in GCC 16 is experimental and unverified here, like the
