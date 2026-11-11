@@ -118,6 +118,24 @@ first.
   directions are weak in practice, what consumers should do while one is
   flagged, and whether the threshold is fixed or adaptive. See
   `rtt3/estimation.md`.
+- **Sensor set**: one inertial unit per link at about 100 Hz, plus GNSS,
+  with two antennas on some configurations only. Still open: whether the
+  base moves; antenna positions and separation, which configurations are
+  single-antenna and whether those have a slew sensor, solution type,
+  rate and latency; how the inertial units report, their low-pass
+  setting and time stamping; whether accelerometers are used for
+  inclination and biases are estimated; the control loop's rate; whether
+  synchronised recordings exist. See `rtt3/estimation.md`.
+- **Link vibration and sensor trust**: decided that, with one inertial
+  unit per link and no structural model, sensors are trusted less with
+  distance along the chain, through a disturbance that accumulates link
+  by link. Still open: link lengths, lowest out-of-plane vibration
+  frequencies against the estimator's bandwidth, how the varying
+  covariance is computed today, and whether recordings exist to fit the
+  per-link constant. See `rtt3/estimation.md`.
+- **Imperfect geometry**: tolerances or calibration accuracy of hinge
+  axes and sensor mountings, rotation rates, and whether compliance is
+  significant. See `rtt3/estimation.md`.
 - **Unexplained sensor motion**: when a gyroscope reports rotation the
   mechanism model cannot produce, should the system warn, model an extra
   freedom, or switch from the planar to the full model? Where are the
