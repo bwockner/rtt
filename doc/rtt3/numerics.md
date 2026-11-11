@@ -1782,8 +1782,11 @@ stationary periods.
 Some dimensions of the state are observed weakly: heading, the base's
 roll, an out-of-plane freedom near the root, and the biases tied up with
 them. "Higher-order derivatives" can help with these in three distinct
-ways. Which of them was meant is an open point; all three are recorded
-because they do not conflict.
+ways, recorded here because they do not conflict. The owner has since
+clarified the intent: the second derivative of the cost, its curvature,
+as the indicator of which dimensions are poorly observed. That is the
+subject of the next subsection; the three readings below remain as
+complementary measures.
 
 **1. Higher time derivatives in the state and the motion prior.**
 
@@ -1870,6 +1873,122 @@ the outer units. Add acceleration states (the first reading) for the
 freedoms that those terms make observable. Keep the third in reserve for
 start-up and for any dimension that the consistency statistics show to
 be overconfident.
+
+### Low curvature of the residual as the indicator of poor observability
+
+**The idea.** The estimator minimises a sum of squared, whitened
+residuals. The second derivative of that cost with respect to the state,
+its curvature, says how sharply the data determine each direction of the
+state. A direction along which the cost is nearly flat is one the
+measurements in the window barely constrain. Curvature is therefore a
+direct, continuously available measure of observability, obtained from
+quantities the solver already computes.
+
+**What is computed.**
+
+- The Gauss-Newton approximation of the curvature is the information
+  matrix, the product of the whitened Jacobian with its transpose. The
+  solver has it, in factored form, at every solve.
+- Observability belongs to directions, not to individual coordinates.
+  Heading may be well determined and a gyroscope bias well determined
+  while one combination of the two is not. So the object of interest is
+  the set of directions of smallest curvature, not the diagonal.
+- Curvature has to be judged against a scale to mean anything, because
+  the state mixes angles, lengths, rates and biases. Two usable scales:
+  - against the prior: the measurement information expressed in
+    coordinates in which the prior is the identity. A value much less
+    than one in some direction says this window's measurements add
+    little to what was already believed there. It is dimensionless and
+    can carry a fixed threshold;
+  - against the state scaling already recommended, when the prior itself
+    is weak, as at start-up.
+
+**Computing it without unbounded work.** A full eigen-decomposition is
+an iterative algorithm whose running time depends on the data, which
+does not belong in a real-time thread. Three bounded alternatives, in
+order of preference:
+
+- *Test known candidate directions.* The off-line observability
+  analysis of the model (the rank check described earlier) lists the
+  directions that can become weak for this mechanism and sensor layout:
+  heading, base roll, particular combinations with biases. The curvature
+  along each is one small matrix-vector product per solve. This is exact
+  for those directions, deterministic and cheap.
+- *Read it from the factorisation.* With a pivoted orthogonal
+  factorisation the trailing diagonal entries of the triangular factor
+  bound the smallest curvatures and identify the directions involved.
+- *A fixed number of iterations* of a symmetric eigenvalue method,
+  warm-started from the previous solve, when unknown weak directions
+  have to be found. If the estimator runs beside the real-time thread,
+  this is where it belongs.
+
+**What the estimator does with a weak direction.**
+
+- *Reports it.* The covariance of the output is large in that direction,
+  and a compact observability summary (the smallest scaled curvature and
+  which named direction it belongs to) is an output of the block, so
+  that a consumer can refuse to act on, say, heading while it is not
+  determined.
+- *Does not move along it on the strength of noise.* A Gauss-Newton step
+  in a nearly flat direction is the ratio of two small numbers and can
+  be large and arbitrary. The step is restricted to the well-determined
+  directions, and in the weak ones the estimate stays where the prior
+  puts it. A sound prior already has much of this effect; the explicit
+  restriction matters at start-up and through long unobservable periods,
+  when the prior in that direction is weak too.
+- *Does not freeze it prematurely.* A direction that is still flat when
+  its state reaches the end of the window would be summarised by a
+  marginalisation prior linearised at an essentially arbitrary value.
+  Such a direction is carried as a variable shared across the window, or
+  its marginalisation is deferred, until its curvature has risen above
+  the threshold.
+- *Can ask for excitation.* The summary says what kind of motion would
+  make the direction observable (horizontal acceleration for heading,
+  rotation about a particular joint for a bias), which an operator
+  prompt or a calibration routine can use.
+
+**Curvature that should not be there.** The same quantity works as a
+check in the other direction. Some directions are known, from the
+model, to be unobservable in certain conditions: heading with one
+antenna while the machine stands still. If the curvature along such a
+direction grows anyway, the estimator is manufacturing information,
+which is the signature of inconsistent linearisation. Monitoring this is
+the run-time counterpart of the first-estimate-Jacobian test, and it is
+cheap because the direction is known in advance.
+
+**Where genuinely higher-order information comes in.**
+
+- *Observability through motion.* Many directions are unobservable from
+  one instant's measurements and become observable only through how the
+  outputs change over time; formally, through higher-order derivatives
+  of the outputs along the motion. In a windowed estimator this needs
+  nothing special: once the window spans enough motion, the direction
+  acquires ordinary first-order curvature. This is the main reason a
+  window observes more than a filter step does, and it is an argument
+  for window length in the weak directions.
+- *The neglected second-order term.* The Gauss-Newton curvature omits
+  the term made of the residuals times the second derivatives of the
+  measurement functions. Where the first-order curvature vanishes, that
+  term is all that is left, but at the solution the residuals are at the
+  noise level, so its sign and size are essentially noise. It should not
+  be relied on to make a direction observable.
+- *The shape of the cost along a weak direction.* What second and higher
+  derivatives do legitimately provide is a better description of the
+  uncertainty where the quadratic approximation is poor. Along a single
+  weak direction the cost can simply be evaluated at a handful of points:
+  a one-dimensional scan costs a few extra residual evaluations and
+  reveals a flat valley, a skewed one, or two separate minima, such as
+  heading being ambiguous by half a turn. That is more informative and
+  more robust than any Taylor term, and it is affordable precisely
+  because the weak directions are few.
+
+**Relation to the parity residual.** The two diagnostics are
+complementary views of the same whitened Jacobian. Directions in
+measurement space that no state can produce give the parity residual:
+the model cannot explain the data. Directions in state space that no
+measurement responds to give low curvature: the data cannot determine
+the model. One flags a missing freedom, the other a redundant or
+unexcited one.
 
 ### Applied to the case at hand: an EKF with per-sensor varying covariance
 
@@ -2108,10 +2227,11 @@ a build with every fast-math option on.
     estimated?
   - At what rate does the control loop that consumes the estimate run?
   - Do recordings with all units and GNSS logged together exist?
-- "Higher-order derivatives for low-confidence dimensions": is the
-  intent accelerations as states, exploiting accelerometer lever-arm
-  signals, second-order terms of the measurement model, or something
-  else? Which dimensions are the low-confidence ones in practice?
+- Curvature of the residual is the intended observability indicator
+  (clarified by the owner). Which directions are weak in practice, and
+  what should a consumer do while one is flagged: hold the last value,
+  stop, or ask for motion? Is a fixed threshold on scaled curvature
+  acceptable, or should it adapt?
 - For the time grid and truncation: what grid spacing is intended, and
   do the inertial units provide integrated angle increments? Is heading
   observed directly (two antennas) or only through motion? Are sensor
