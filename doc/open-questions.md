@@ -101,8 +101,9 @@ first.
   covariance. Still open: number of states, number and dimension of
   sensors, whether each sensor's noise is uncorrelated between its
   components, whether to re-linearise between sensor updates, whether the
-  covariance is used downstream, which Lie groups the states live on
-  and which error convention is used, and the state magnitudes, required
+  covariance is used downstream, whether the five or six SE(3) bodies
+  are joint-connected links or independent, which error convention is
+  used, and the state magnitudes, required
   resolutions and run length that decide whether a mixed-precision
   factored form is safe. See `rtt3/numerics.md`.
 - **Generated kinematics**: SymForce is planned for closed-form

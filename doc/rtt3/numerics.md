@@ -534,6 +534,80 @@ functions use the generator's own geometry types internally; the boundary
 types name their fields (rotation as a quaternion with named components,
 translation) as described under "Eigen".
 
+### Several poses at once: SE(3)^n with n of five or six
+
+The state in question is a product of n poses, n usually five or six.
+The product of Lie groups is again a Lie group, so everything above
+applies body by body. What changes is the size: the tangent space has
+6n dimensions, 30 to 36 before any bias states, and at that size the
+block structure matters more than anything else.
+
+**Size of the problem.** A 36 by 36 covariance has 666 distinct entries.
+A dense propagation `F P Fᵀ` costs on the order of ninety thousand
+multiply-adds, and a rank-m update touches all of P. That is small in
+absolute terms but no longer negligible at kilohertz rates on the ARM
+target, and it is large enough for the single-precision argument to
+carry real weight: the matrices are dense blocks that vectorise well, so
+halving the element size approaches the full factor of two.
+
+**Use the six-by-six block structure.**
+
+- If each pose's own dynamics do not depend on the other poses, the
+  transition Jacobian is block diagonal with one 6 by 6 block per body.
+  The propagation is then a set of small products, one per pair of
+  bodies, and only for one triangle of pairs: roughly a fifth to a tenth
+  of the dense cost. Coupling that exists only between neighbouring
+  bodies gives a block-banded Jacobian with a similar saving.
+- A sensor usually observes one body, or the relation between two. Its
+  measurement Jacobian is non-zero in 6 or 12 of the 36 columns, so the
+  gain and innovation covariance for that sensor involve only those
+  columns of P. The per-sensor update described below fits unchanged.
+- If nothing couples two groups of bodies (no shared dynamics, no
+  measurement relating them, no shared process noise), they are separate
+  filters. The filter is only as large as the largest coupled group.
+
+**Generate the blocks, not the whole matrix.** Fully unrolling a
+36-dimensional propagation symbolically produces thousands of
+expressions; code size, compile time and instruction-cache footprint
+then work against the saving. The better division of labour:
+
+- the symbolic model generates each body's 6 by 6 transition block and
+  each sensor's Jacobian block, where the structure of SE(3) (rotation
+  and translation parts, zeros, shared terms) is exploited;
+- the assembly over bodies is ordinary fixed-size block arithmetic in a
+  short loop over block pairs, which the compiler vectorises and which
+  stays compact.
+
+A block-indexed covariance type in the block package (n by n blocks of
+6 by 6, one triangle stored) expresses this directly and keeps the
+per-body error convention attached to each block.
+
+**Is SE(3)^n the right state?** Worth asking before optimising it. If
+the n poses are links of one mechanism connected by joints, a pose per
+link carries far more coordinates than the mechanism has degrees of
+freedom, and the constraints between them have to be enforced by
+measurements or by the model. Estimating the joint coordinates (plus a
+base pose if it moves) gives a state of roughly n to n + 6 dimensions
+instead of 6n, with the link poses obtained from the generated forward
+kinematics. That is a reduction of the cubic term by two orders of
+magnitude and would dominate every other measure in this section.
+Estimating full poses per link remains the right choice when the links
+are not rigidly constrained (flexible structures, clearances, independent
+bodies) or when the constraints are exactly what is being estimated.
+
+**Planar variant.** With SE(2) per body the tangent space has 3n
+dimensions, 15 to 18. The same block scheme applies with 3 by 3 blocks.
+
+**Memory.** A 36 by 36 single-precision matrix is about 5 kB, double
+about 10 kB. Covariance, factor and one temporary fit comfortably in a
+first-level cache in either precision, held as fixed-size objects in the
+node's state with no allocation.
+
+**Factored form at this size.** The sequential structure of the UD time
+update costs more as the dimension grows. A Cholesky factor with a
+QR-based time update, done block-wise, keeps the arithmetic regular and
+is the better match for vector code here.
+
 ### Applied to the case at hand: an EKF with per-sensor varying covariance
 
 The filter in question is an extended Kalman filter in which each
@@ -752,10 +826,15 @@ a build with every fast-math option on.
   How many states, how many sensors and of what dimension each? Is each
   sensor's own noise uncorrelated between its components? Should sensors
   be re-linearised between updates? Is the covariance used downstream?
-- Which groups do the states live on (SE(3), SE(2), SO(3)), how far
-  from the machine origin do the estimated parts move, and which error
-  convention (body or fixed frame) is used today? Do the models allow an
-  invariant formulation?
+- The state is SE(3)^n with n of five or six (answered). Are the n
+  bodies links of one mechanism connected by joints, or independent or
+  loosely coupled? Which bodies does each sensor relate? Does one body's
+  dynamics depend on another's? Are there bias or other vector states in
+  addition?
+- What is the filter's rate and its share of the cycle time today?
+- How far from the machine origin do the estimated parts move, and
+  which error convention (body or fixed frame) is used today? Do the
+  models allow an invariant formulation?
 - Mixed precision (double nominal state and residual, single-precision
   covariance factor) is the proposed way to use 32-bit lanes. What are
   the magnitudes and required resolutions of the states, and how long
