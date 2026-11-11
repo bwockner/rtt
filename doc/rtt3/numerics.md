@@ -430,6 +430,110 @@ if, on recorded data and in simulation, its state and reconstructed
 covariance stay within the agreed tolerance of the double reference and
 its consistency statistics are unchanged.
 
+### When the state is a Lie group element in machine space
+
+Poses and orientations of machine parts are elements of groups such as
+SE(3), SO(3) or, for planar motion, SE(2). For these the mixed-precision
+split is not just possible but the natural formulation, and a few choices
+specific to groups decide whether single precision is safe.
+
+**The split falls on the group and tangent boundary.**
+
+- The *nominal state* is the group element itself (a rotation and a
+  translation). It is held, composed and normalised in double precision.
+  Composition and re-normalisation are a few dozen scalar operations, so
+  double costs nothing that matters.
+- The *error state* is a small vector in the tangent space (six numbers
+  for SE(3), three for SE(2)), plus any ordinary vector states such as
+  biases. The covariance factor and the gains belong to this space and
+  are the single-precision part.
+- The *correction* is applied by the group's retraction: the nominal
+  state composed with the exponential of the estimated error, in double.
+- The *residual* for a pose-valued measurement is the logarithm of the
+  relative transform between prediction and measurement. It is formed in
+  double, where the two nearly equal poses cancel exactly as they should,
+  and only the resulting small tangent vector is converted to single.
+
+Because the error vector is small by construction, its seven digits are
+spent on the error and not on the magnitude of the pose. That removes the
+state-resolution problem described above for the group-valued states.
+
+**Which error definition: this decides the conditioning.** The error can
+be defined in the moving (body) frame or in the fixed (machine) frame,
+and the two give covariances that differ by the adjoint of the pose. The
+adjoint of an SE(3) element contains the translation, so:
+
+- with the error expressed in the fixed frame, a small rotation
+  uncertainty of a part far from the origin appears as a large
+  translational uncertainty, strongly correlated with the rotation. The
+  tangent covariance becomes ill conditioned in proportion to the
+  distance from the origin, which is precisely what single precision
+  cannot afford;
+- with the error expressed in the body frame, or with the fixed frame's
+  origin placed near the working volume, the lever arm is short and the
+  covariance stays well conditioned.
+
+So the frame and side of the error definition are chosen for
+conditioning, stated once, and used identically in the simulator and on
+the target. Each tangent-space covariance on a port carries that
+convention as an annotation, and links between ports with different
+conventions are rejected at build time, in the same way as mismatched
+units (`compile-time.md`). Mixing conventions silently is the most
+common error in this kind of code.
+
+**Scale rotation against translation.** Tangent components are radians
+and metres. If the machine's characteristic length is far from one metre,
+the rotational and translational variances differ by orders of magnitude
+for no physical reason. Choosing the length unit of the error state so
+that the two are comparable is part of the state scaling already
+recommended, and belongs in the symbolic model.
+
+**Invariant error formulations.** For systems whose dynamics are
+compatible with the group structure, defining the error through the
+group operation (the invariant extended Kalman filter) makes the error
+dynamics independent of the current state estimate. Where that applies:
+
+- the transition Jacobian depends only on inputs and the time step, so
+  more of it is constant or sparse and the generated propagation is
+  cheaper;
+- the filter's behaviour does not depend on how good the current
+  estimate is, which improves consistency, especially at start-up.
+
+Whether the machine's kinematic and sensor models qualify has to be
+checked model by model; where they do, it is preferable to the plain
+error-state form.
+
+**Planar motion.** For approximately planar machines the group is SE(2)
+with a three-dimensional tangent space, so the covariance factor is very
+small. The same symbolic model produces the planar and the full variant
+(`blocks.md`, "Generated kinematics"); the estimator follows the same
+pattern, and the planar one is where the cost per step is lowest but also
+where single precision has least to gain, because there is so little
+arithmetic to vectorise.
+
+**Details that matter in single precision.**
+
+- *Exponential and logarithm near zero* use series expansions; the
+  generator's small-offset handling covers this and its offset must be
+  appropriate for the precision in which the function is evaluated.
+- *Logarithm near a half turn* is ill conditioned. Residuals are small
+  rotations, so this is avoided as long as outliers are gated before the
+  logarithm's result is used.
+- *Normalisation.* The nominal rotation is re-normalised in double every
+  step; it is cheap and stops drift off the group.
+- *Covariance after a correction.* Strictly, the covariance should be
+  transported to the tangent space of the corrected state. The transport
+  is close to identity for small corrections and is commonly omitted; it
+  should be included if corrections can be large, for example after a
+  long period without measurements.
+
+**Types.** Group elements, tangent vectors and tangent-space covariances
+are distinct types in the block package, so that adding two poses or
+applying a covariance in the wrong space does not compile. The generated
+functions use the generator's own geometry types internally; the boundary
+types name their fields (rotation as a quaternion with named components,
+translation) as described under "Eigen".
+
 ### Applied to the case at hand: an EKF with per-sensor varying covariance
 
 The filter in question is an extended Kalman filter in which each
@@ -648,6 +752,10 @@ a build with every fast-math option on.
   How many states, how many sensors and of what dimension each? Is each
   sensor's own noise uncorrelated between its components? Should sensors
   be re-linearised between updates? Is the covariance used downstream?
+- Which groups do the states live on (SE(3), SE(2), SO(3)), how far
+  from the machine origin do the estimated parts move, and which error
+  convention (body or fixed frame) is used today? Do the models allow an
+  invariant formulation?
 - Mixed precision (double nominal state and residual, single-precision
   covariance factor) is the proposed way to use 32-bit lanes. What are
   the magnitudes and required resolutions of the states, and how long
