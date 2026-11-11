@@ -133,7 +133,7 @@ connection was made.
 - ABI: recompile (new members in class templates only).
 
 **F3. A tracing hook is called on every write even when tracing is compiled out.**
-`OutputPort<T>::write` calls `traceWrite()` (`rtt/OutputPort.hpp:253`).
+`OutputPort<T>::write` calls `traceWrite()` (`rtt/OutputPort.hpp:255`).
 It is an out-of-line library function whose body is empty unless LTTng
 support is built in (`rtt/base/OutputPortInterface.cpp:117-120`,
 `rtt/os/traces.h:9-10`). The typed `InputPort<T>::read` has no such call.
