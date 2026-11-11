@@ -1314,13 +1314,69 @@ statistical sense, since it only records how related two units are; the
 sign of the measured lag between neighbours shows which way disturbances
 actually travel, and is a useful diagnostic of where they originate.
 
-**Order of work.** Measure first: from recordings, compute the
-cross-correlation between neighbouring units and the autocorrelation of
-each. If the lags are well under a sample and the autocorrelation decays
-within a sample or two, none of this is needed and the default rule
-stands as written. Otherwise apply remedy 3 always, remedy 2 next, and
-remedy 1 only where the measured lag is a significant fraction of the
-vibration period and time stamps are good enough.
+**At the actual sample rate: a few hundred hertz.** The inertial units
+are sampled at hundreds of hertz, so one sample period is roughly two to
+ten milliseconds. That changes which of the effects above matter.
+
+- *Propagation delay is mostly below one sample.* Aligning units at
+  matched times (remedy 1) would mean interpolating by a fraction of a
+  sample in signals that have little bandwidth to spare. It is dropped
+  from the default. The coherence factor (remedy 2) and the treatment of
+  correlated samples (remedy 3) remain, and are sufficient: they record
+  how much cancellation is really available without needing to resolve
+  the delay.
+- *Sampling skew between units is now the larger timing error.* Units
+  that sample on their own clocks can differ by up to a whole sample
+  period, several milliseconds, and drift relative to each other. That
+  is larger than any propagation delay and has the same effect on the
+  cancellation between neighbours. The measures, in order of
+  preference: a common sampling trigger for all units; otherwise
+  hardware time stamps and predicting each measurement at its own time;
+  otherwise the known bound enters as a timing uncertainty.
+- *Aliasing becomes the first thing to check.* Structural vibration
+  above half the sample rate does not disappear. Unless it is removed
+  before sampling, it folds down and appears as slow apparent motion,
+  which is exactly what the filter would attribute to a joint, and it is
+  incoherent between units. Inertial sensors generally sample internally
+  at a much higher rate and offer a configurable low-pass before
+  decimation; that filter has to be set with its cut-off safely below
+  half the output rate on every unit, identically. Its delay is then a
+  known, common latency of a few milliseconds that the estimator
+  accounts for as a measurement delay. This is a configuration check on
+  hardware not examined here.
+- *Only the low modes are seen.* Vibration below the cut-off is in band
+  and is what the accumulated-disturbance model and the correlation
+  remedies deal with. Low modes of long links ring for many samples, so
+  successive samples are still correlated and remedy 3 still applies.
+- *Use integrated outputs where the unit provides them.* If orientation
+  is integrated from angular rate, a unit's internally integrated angle
+  increments are preferable to sampled rates at this output rate,
+  because they do not lose the motion between samples.
+
+**What this means for effort.** At a few hundred hertz, with a reduced
+state of about ten and fifteen to eighteen gyroscope axes, the estimator
+is computationally trivial on the target. Nothing in this document about
+vector width, single precision or factorisation cost is needed to make
+it fast enough. The value is in the structure and the noise model: the
+reduction to the true degrees of freedom, the accumulated disturbance
+with a measured coherence, anti-aliasing and time alignment. The
+performance material remains relevant to the control path that runs at
+the fast rate, not to this filter.
+
+**Order of work.**
+
+1. Confirm the anti-alias setting and output rate of every inertial
+   unit, and how their samples are time-stamped or triggered.
+2. From recordings with all units logged together, compute the
+   autocorrelation of each unit and the cross-correlation between
+   neighbours.
+3. Apply the correlated-sample treatment (remedy 3) using the measured
+   correlation times.
+4. Set the coherence factors (remedy 2) from the measured
+   cross-correlation.
+5. Consider matched-time alignment only if the recordings show a lag of
+   more than a sample between neighbours that is not explained by
+   sampling skew.
 
 ### Applied to the case at hand: an EKF with per-sensor varying covariance
 
@@ -1548,11 +1604,12 @@ a build with every fast-math option on.
   addition?
 - What is the filter's rate and its share of the cycle time today?
 - Disturbances are time-correlated through their finite propagation
-  speed (stated by the owner). What are the link lengths and material,
-  the inertial sample rate, and how accurately are samples from
-  different units time-stamped relative to each other? Do recordings
-  with all units logged together exist, so that lags and coherence can
-  be measured?
+  speed, and the inertial sample rate is a few hundred hertz (stated by
+  the owner). Which inertial units are used, what low-pass and output
+  rate are they configured with, and do they share a sampling trigger or
+  carry hardware time stamps? Do recordings with all units logged
+  together exist, so that correlation and coherence can be measured?
+  At what rate does the control loop that consumes the estimate run?
 - There is one inertial unit per link, and the default rule is that
   trust falls with distance along the chain, without modelling mode
   shapes (decided). What are the link lengths and the lowest

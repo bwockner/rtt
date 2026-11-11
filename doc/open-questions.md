@@ -117,10 +117,12 @@ first.
   the estimator's bandwidth, how the varying covariance is computed
   today, and whether recordings exist to fit the per-link constant. See
   `rtt3/numerics.md`.
-- **Propagation delay between inertial units**: link lengths and
-  material, inertial sample rate, relative time-stamp accuracy between
-  units, and whether synchronised recordings exist to measure lags and
-  coherence. See `rtt3/numerics.md`.
+- **Inertial sampling**: the rate is a few hundred hertz. Which units,
+  what low-pass and output rate are configured, is there a common
+  trigger or hardware time stamps, do synchronised recordings exist, and
+  at what rate does the consuming control loop run? Aliasing and
+  sampling skew matter more than propagation delay at this rate. See
+  `rtt3/numerics.md`.
 - **Imperfect geometry**: tolerances or calibration accuracy of hinge
   axes and sensor mountings, rotation rates, and whether compliance is
   significant. These set how much less a distant sensor is trusted. See
