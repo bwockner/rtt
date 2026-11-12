@@ -180,6 +180,11 @@ first.
   actuators respond,
   whether labelled recordings exist, and whether the inertial rate can
   be raised. See `estimation/contact-detection.md`.
+- **Learned dynamic information**: which quantities are wanted, whether
+  a test machine can carry temporary reference sensors, how much
+  recorded data exists across machine sizes, and whether a learned
+  component is acceptable in the control path. See
+  `estimation/learned-dynamics.md`.
 - **Generated kinematics**: SymForce is planned for closed-form
   kinematics. Which version, is generated code checked in or regenerated,
   which calculations stay on KDL, and what tolerance defines

@@ -60,6 +60,7 @@ calibration data model.
 | [sensor-models.md](sensor-models.md) | Distance-dependent trust; link vibration; propagation delay and sampling; the 100 Hz inertial units and GNSS; accelerometer inclination and stillness; GNSS coloured noise; bias handling | A0, A2 |
 | [estimator.md](estimator.md) | The windowed solver; time grid and pre-integration; marginalising the oldest state; observability from curvature | A3, A4 |
 | [contact-detection.md](contact-detection.md) | Evaluation: inferring tool contact from changes in vibration behaviour, and the more direct alternatives; sudden loss of contact; a dozer blade passing over a hole and anticipating the body's dip | X1 |
+| [learned-dynamics.md](learned-dynamics.md) | Evaluation: JEPA and dimensionless-group networks for dynamic quantities the kinematic model does not observe; simpler alternatives; where a learned part may attach | X3 |
 | [filter-numerics.md](filter-numerics.md) | **Deferred.** Cost and numerical form of Kalman-style updates; factored and mixed-precision forms. Reopened only if a higher sensor rate is adopted | X2 |
 | [calibration.md](calibration.md) | Parameter roles; batch calibration; external observations; single-joint sweeps; total station use; calibration without it; validation poses | A5, A6 |
 | [calibration-data.md](calibration-data.md) | Record types for observations; linked observations; surface offsets; plane heading and the "nothing moved" levels; dependency graph and invalidation | A5 |
@@ -86,6 +87,7 @@ These are not on the path to a working estimator and gate nothing.
 | Stream | Content | Depends on | Outcome |
 |---|---|---|---|
 | **X1** Contact detection | Evaluate whether free and contact conditions are distinguishable in the inertial data; for the stated use, sudden loss of contact and overshoot compensation, measure the time budget and which signals detect the release soonest; prototype off line; fuse with force and actuation cues | A0 for recordings; A2 for the vibration model | A go or no-go from recorded data, then a contact probability usable by A2 and A3 |
+| **X3** Learned dynamic information | Establish which dynamic quantities are observable at all; virtual sensors against temporary reference sensors; dimensionless formulation; JEPA pre-training as a research comparison | A0 for recordings; a test machine with reference sensors | Per quantity, a decision on whether a learned estimate is worth integrating, and at what level |
 | **X2** Filter arithmetic | Structure, factorisation and precision measures for a faster or larger filter | A decision to raise the inertial sample rate | Not scheduled |
 
 X1 covers two stated uses with very different time budgets: a sudden
@@ -137,7 +139,7 @@ graph TD
 | After A2 and A3 | **A4** and **A6** |
 | After A3 and A4 | **A7**, alongside A6 |
 | After A6 and A7 | **A8** |
-| Any time after A0 | **X1**, step 1 (looking at recordings), independently of everything else |
+| Any time after A0 | **X1**, step 1 (looking at recordings), and **X3**, steps 1 to 3, independently of everything else |
 
 As tracks that different people could own:
 

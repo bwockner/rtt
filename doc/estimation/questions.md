@@ -120,3 +120,7 @@ prioritised list covering all plans is in
   measured? What is contact detection wanted for, and with what latency?
   Do recordings with known contact periods exist? Can the inertial rate
   be raised on the outer links? See `contact-detection.md`.
+- For learned dynamic information: which quantities are wanted, can one
+  machine carry temporary reference sensors, how much recorded data
+  exists and from how many machine sizes, and is a learned component
+  acceptable in the control path? See `learned-dynamics.md`.
