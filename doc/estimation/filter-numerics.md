@@ -2,7 +2,37 @@
 
 Part of the state estimation and calibration plan; see [README.md](README.md) for the index and the work streams.
 
-Streams: A3. Notes on the cost and numerical form of Kalman-style updates. Much of this was written before the estimator became a windowed factor graph over a reduced state at 100 Hz, where computation is no longer a constraint; it is kept as reference for the single-step case and for any filter that runs at a fast rate.
+**Status: deferred.** Streams: X2 (not scheduled).
+
+This document is about the cost and numerical form of Kalman-style
+updates: avoiding the covariance recursion, exploiting structure,
+sequential updates, factorisations, and single or mixed precision. It
+was written before two things were settled: the state is reduced to the
+mechanism's true degrees of freedom, and the sensors run at about
+100 Hz. With a few tens of states at that rate the estimator is
+computationally trivial on the target, so none of this work is needed
+now and none of it is scheduled.
+
+**When it becomes relevant again.** If correcting for vibration
+justifies a higher sensor update rate, the picture changes. Modal states
+for the links (`sensor-models.md`), or contact detection from vibration
+(`contact-detection.md`), may call for inertial data at several hundred
+hertz to a kilohertz or more on some links. The estimator's rate, the
+number of states and the cost per step would then all rise together, and
+the measures below are where to look first. The trigger for reopening
+this document is a decision to raise the inertial rate, backed by a
+measured solve time that does not fit the cycle.
+
+**What still applies today, independent of cost.** Three points in this
+document are about correctness, not speed, and are already part of the
+plan elsewhere: solve with a factorisation and never an explicit
+inverse; keep covariances symmetric and positive definite by
+construction (the square-root form used for marginalisation in
+`estimator.md`); and form residuals of large quantities in double
+precision.
+
+The text below is unchanged from when it was written and still speaks
+of an EKF in places.
 
 Factorisation helps, but for the state sizes usual in control (a handful
 to a few tens of states) it is rarely the largest gain. The options

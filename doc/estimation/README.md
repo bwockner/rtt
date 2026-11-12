@@ -59,7 +59,8 @@ calibration data model.
 | [state-model.md](state-model.md) | Lie group states and error conventions; reduction to the true degrees of freedom; the gyroscope worked case; joint filter versus cascade | A1 |
 | [sensor-models.md](sensor-models.md) | Distance-dependent trust; link vibration; propagation delay and sampling; the 100 Hz inertial units and GNSS; accelerometer inclination and stillness; GNSS coloured noise; bias handling | A0, A2 |
 | [estimator.md](estimator.md) | The windowed solver; time grid and pre-integration; marginalising the oldest state; observability from curvature | A3, A4 |
-| [filter-numerics.md](filter-numerics.md) | Cost and numerical form of Kalman-style updates; factored and mixed-precision forms. Reference material | A3 |
+| [contact-detection.md](contact-detection.md) | Evaluation: inferring tool contact from changes in vibration behaviour, and the more direct alternatives | X1 |
+| [filter-numerics.md](filter-numerics.md) | **Deferred.** Cost and numerical form of Kalman-style updates; factored and mixed-precision forms. Reopened only if a higher sensor rate is adopted | X2 |
 | [calibration.md](calibration.md) | Parameter roles; batch calibration; external observations; single-joint sweeps; total station use; calibration without it; validation poses | A5, A6 |
 | [calibration-data.md](calibration-data.md) | Record types for observations; linked observations; surface offsets; plane heading and the "nothing moved" levels; dependency graph and invalidation | A5 |
 | [questions.md](questions.md) | Open points for the owner | - |
@@ -77,6 +78,19 @@ calibration data model.
 | **A6** Calibration procedures | Batch solve over a session; static poses; single-joint sweeps; total-station and instrument-free procedures; validation pose selection | A2, A3, A5 | Injected errors in simulation are recovered within reported uncertainty; a reference and a field calibration of one machine agree |
 | **A7** Deployment | The estimator on the target: predictor in the control thread, solver beside it; local and global outputs; per-machine calibration values | A3, A4, and a host framework | Runs on the target within its time budget with no allocation in the control thread |
 | **A8** Validation | Closed-loop simulation with the plant model; recorded-data regression; field validation at the poses of largest predicted error | A6, A7 | Accuracy and honesty of uncertainty meet the specification |
+
+### Exploratory and deferred
+
+These are not on the path to a working estimator and gate nothing.
+
+| Stream | Content | Depends on | Outcome |
+|---|---|---|---|
+| **X1** Contact detection from vibration | Evaluate whether free and contact conditions are distinguishable in the inertial data; prototype off line; fuse with force and actuation cues | A0 for recordings; A2 for the vibration model | A go or no-go from recorded data, then a contact probability usable by A2 and A3 |
+| **X2** Filter arithmetic | Structure, factorisation and precision measures for a faster or larger filter | A decision to raise the inertial sample rate | Not scheduled |
+
+X1 and X2 are linked: a positive result from X1, or a need for modal
+vibration states, is what would justify a higher inertial rate, and that
+is what would reopen X2.
 
 ## Dependencies
 
@@ -117,6 +131,7 @@ graph TD
 | After A2 and A3 | **A4** and **A6** |
 | After A3 and A4 | **A7**, alongside A6 |
 | After A6 and A7 | **A8** |
+| Any time after A0 | **X1**, step 1 (looking at recordings), independently of everything else |
 
 As tracks that different people could own:
 

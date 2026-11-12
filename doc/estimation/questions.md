@@ -116,3 +116,7 @@ prioritised list covering all plans is in
   each joint (encoder, cylinder position, pressure)? Which parameters
   are expected to drift and should be tracked on line? Is there a bench
   procedure for inertial intrinsics today?
+- For contact detection: are cylinder pressures or motor currents
+  measured? What is contact detection wanted for, and with what latency?
+  Do recordings with known contact periods exist? Can the inertial rate
+  be raised on the outer links? See `contact-detection.md`.
