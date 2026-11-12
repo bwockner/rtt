@@ -54,8 +54,8 @@ that are still open.
 |---|---|
 | [doc/rtt3/README.md](doc/rtt3/README.md) | Index of the `rtt3` plan: design by topic, stages, their dependencies and what can run in parallel |
 | [doc/rtt3/logging.md](doc/rtt3/logging.md) | Lock-free logger for `rtt3` |
-| [doc/rtt3/estimation.md](doc/rtt3/estimation.md) | State estimation and calibration on top of `rtt3` |
 | [doc/rtt3/numerics.md](doc/rtt3/numerics.md) | SIMD, floating-point settings and agreement between simulator and target |
+| [doc/estimation/README.md](doc/estimation/README.md) | Application plan for state estimation and calibration, kept separate from the framework so it can move to its own project |
 | [doc/optimisation-plan.md](doc/optimisation-plan.md) | Low-risk optimisations of the existing RTT 2.x code, with no API change |
 | [doc/open-questions.md](doc/open-questions.md) | Undecided points, the licence position, and unverified assumptions |
 | [AGENTS.md](AGENTS.md) | Layout, build and test instructions, and working rules for contributors and automated agents |

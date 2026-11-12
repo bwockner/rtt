@@ -106,18 +106,18 @@ first.
   loops, which error convention is
   used, and the state magnitudes, required
   resolutions and run length that decide whether a mixed-precision
-  factored form is safe. See `rtt3/estimation.md`.
+  factored form is safe. See `estimation/`.
 - **Estimator architecture**: a truncated factor graph (fixed-lag
   smoother) over the reduced state, not a pure EKF and not a cascade.
   Still open: window length and what sets it, whether the solve runs in
   the real-time thread or beside it, which solver, whether a delayed
   smoothed output is wanted, the grid spacing, and whether biases are
-  per grid state or shared across the window. See `rtt3/estimation.md`.
+  per grid state or shared across the window. See `estimation/`.
 - **Observability indicator**: the curvature of the residual along a
   direction is the measure of how well it is observed. Still open: which
   directions are weak in practice, what consumers should do while one is
   flagged, and whether the threshold is fixed or adaptive. See
-  `rtt3/estimation.md`.
+  `estimation/`.
 - **Sensor set**: one inertial unit per link at about 100 Hz, plus GNSS,
   with two antennas on some configurations only. Still open: whether the
   base moves; antenna positions and separation, which configurations are
@@ -125,36 +125,36 @@ first.
   rate and latency; how the inertial units report, their low-pass
   setting and time stamping; whether accelerometers are used for
   inclination and biases are estimated; the control loop's rate; whether
-  synchronised recordings exist. See `rtt3/estimation.md`.
+  synchronised recordings exist. See `estimation/`.
 - **Link vibration and sensor trust**: decided that, with one inertial
   unit per link and no structural model, sensors are trusted less with
   distance along the chain, through a disturbance that accumulates link
   by link. Still open: link lengths, lowest out-of-plane vibration
   frequencies against the estimator's bandwidth, how the varying
   covariance is computed today, and whether recordings exist to fit the
-  per-link constant. See `rtt3/estimation.md`.
+  per-link constant. See `estimation/`.
 - **Imperfect geometry**: tolerances or calibration accuracy of hinge
   axes and sensor mountings, rotation rates, and whether compliance is
-  significant. See `rtt3/estimation.md`.
+  significant. See `estimation/`.
 - **GNSS**: velocity is available and carrier-phase corrections often
   are. Still open: which receiver and whether its position output is
   internally filtered, how long and frequent corrections outages are,
   whether the age of corrections is reported, and whether consumers need
   a continuous local position, an absolute one, or both. See
-  `rtt3/estimation.md`.
+  `estimation/`.
 - **Gyroscope bias treatment**: proposed as a considered parameter,
   measured at stillness and not estimated, following the owner's
   experience that omitting it helped. Still open: what "a degree over
   hours" refers to, which gyroscopes are used, and whether Earth rate is
-  compensated. See `rtt3/estimation.md`.
+  compensated. See `estimation/`.
 - **Sensor biases**: whether stationary recordings exist to measure bias
   instability, whether the units report temperature, how long warm-up
   is, and how often the machine is still in normal work. These set how
-  fast the estimator may move a bias. See `rtt3/estimation.md`.
+  fast the estimator may move a bias. See `estimation/`.
 - **Unexplained sensor motion**: when a gyroscope reports rotation the
   mechanism model cannot produce, should the system warn, model an extra
   freedom, or switch from the planar to the full model? Where are the
-  sensors mounted and is the base fixed? See `rtt3/estimation.md`.
+  sensors mounted and is the base fixed? See `estimation/`.
 - **Identification and calibration**: the estimator's factor graph is
   also to be used for calibration (mounting offsets, intrinsics, time
   offsets, deadband and backlash). Still open: whether commands are
@@ -167,11 +167,11 @@ first.
   specification is. For calibration without a total station: what
   equipment can be assumed in the field and which parameters change
   there. See
-  `rtt3/estimation.md`. [M24]
+  `estimation/`. [M24]
 - **Calibration data model**: whether the record types are shared with
   the simulator, the file format, how manual observations are entered,
   what the total station exports, and who may invalidate an observation.
-  See `rtt3/calibration-data.md`.
+  See `estimation/calibration-data.md`.
 - **Generated kinematics**: SymForce is planned for closed-form
   kinematics. Which version, is generated code checked in or regenerated,
   which calculations stay on KDL, and what tolerance defines

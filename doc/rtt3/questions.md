@@ -111,8 +111,8 @@ consolidated and prioritised list covering all plans is in
     (answered). Which version, and is generated code checked in or
     regenerated at build time? Which calculations stay on KDL? What
     tolerance defines "approximately planar" for each machine? See
-    `blocks.md`.
+    `../estimation/kinematics.md`.
 24. **Estimation and calibration**: the open points on the estimator
     (state size, sensor layout and timing, window and grid, weak
     directions, actuator-side measurements, which parameters to track)
-    are listed at the end of `estimation.md`.
+    are listed in `../estimation/questions.md`.

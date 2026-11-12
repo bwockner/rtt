@@ -316,15 +316,15 @@ dimensions for approximately planar calculations, which came at the cost
 of extra code complexity. Symbolic generation addresses the same need at
 the source: the planar restriction is stated once in the symbolic model,
 and the generator emits simplified scalar code with the full interface.
-See "Generated kinematics" in `blocks.md`.
+See `../estimation/kinematics.md`.
 
 The patterned and factored matrix types above are therefore not part of
 the first version. They remain a documented option for hand-written
 blocks and for compositions that happen outside generated code, to be
 taken up only if profiling shows such a place. One concrete use has since
 appeared: a covariance of the form `B P_q Bᵀ` for a mechanism with few
-degrees of freedom (`estimation.md`, "Automatic reduction when the true
-degrees of freedom are few").
+degrees of freedom (`../estimation/state-model.md`, "Automatic reduction when the
+true degrees of freedom are few").
 
 ## Limits and costs
 

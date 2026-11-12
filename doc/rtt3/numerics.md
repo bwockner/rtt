@@ -240,7 +240,8 @@ trivial-copyability of fixed-size types have changed between releases.
 
 The notes on Kalman-style filtering, Lie group states, reduction to the
 true degrees of freedom, sensor noise models, the truncated factor graph
-and calibration have moved to their own document, `estimation.md`.
+and calibration are application-level and are in
+`../estimation/` (see its `README.md`).
 
 ## Agreement between the simulator and the target: within tolerance
 

@@ -1,8 +1,9 @@
-# rtt3: calibration observations as data
+# Calibration observations as data
 
-Part of the `rtt3` plan; see [README.md](README.md) for the index.
-Companion to [estimation.md](estimation.md), which describes how these
-observations are used as factors.
+Part of the state estimation and calibration plan; see
+[README.md](README.md) for the index. Companion to
+[calibration.md](calibration.md), which describes how these observations
+are used as factors. Streams: A5.
 
 Status: a design sketch for discussion. No code exists. The C++ below
 shows the intended shape of the types, not a final interface, and uses
@@ -285,7 +286,7 @@ namespace cal {
 struct pose_group {
     pose_group_id id;
     time_range    span;
-    double        stillness_statistic;        // the windowed test of estimation.md
+    double        stillness_statistic;        // the windowed test of sensor-models.md
     std::optional<onboard_snapshot> sensors;  // inertial and GNSS data for this pose
 };
 
@@ -692,7 +693,7 @@ observability report answers for the actual numbers.
 ## Single-joint sweeps
 
 A sweep (one joint moved alone, with a tracked prism and the inertial
-units recording) is described in `estimation.md`. As data it is one more
+units recording) is described in `calibration.md`. As data it is one more
 "nothing else moved" assumption, between the slew epoch and the pose
 group, together with two series.
 
@@ -750,7 +751,7 @@ terms. The role decides whether it enters the fit or only the
 validation. The status decides whether it is used at all.
 
 Reading and writing the records, and the hash of their schema, come from
-reflection over the structs, like port data types, so the file format
+reflection over the structs, like port data types in `rtt3`, so the file format
 needs no separate description.
 
 ## What else is needed

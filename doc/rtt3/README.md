@@ -26,10 +26,11 @@ tried on a real compiler; stage S1 exists to do that first.
 | [operations-and-properties.md](operations-and-properties.md) | Annotated operations and properties, typed callers | S10 |
 | [runtime-layer.md](runtime-layer.md) | Machine files, graph model, inspection, port observation, UDP bridge, loading | S11 |
 | [compile-time.md](compile-time.md) | What is computed or checked during compilation, further opportunities, limits | S1, S8, all |
-| [estimation.md](estimation.md) | The estimator built on the framework: reduced state, sensor noise models, truncated factor graph, observability, identification and calibration | S4, S7 |
-| [calibration-data.md](calibration-data.md) | Data model for calibration observations: typed payloads, linked observations, dependency graph and invalidation | S13 |
 | [numerics.md](numerics.md) | SIMD, alignment, floating-point state, Eigen, comparing with the simulator | S4, S6, S7 |
 | [questions.md](questions.md) | Open design questions M1 to M24 | - |
+
+The plan for the machine's state estimator and its calibration is an
+application plan and lives in [../estimation/](../estimation/README.md).
 
 Related documents outside this directory:
 [../open-questions.md](../open-questions.md) (all open points in priority

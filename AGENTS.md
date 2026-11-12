@@ -28,9 +28,8 @@ remain in the tree.
 | `doc/rtt3/overview.md` | Decisions taken, architecture, risks |
 | `doc/rtt3/logging.md` | The lock-free logger for `rtt3` |
 | `doc/rtt3/compile-time.md` | What is computed or checked at compile time, and the limits |
-| `doc/rtt3/estimation.md` | The estimator and calibration built on the framework: state reduction, sensor noise models, factor graph |
-| `doc/rtt3/calibration-data.md` | Data model for calibration observations and their invalidation |
 | `doc/rtt3/numerics.md` | SIMD, alignment, floating-point settings, comparing results with the simulator |
+| `doc/estimation/README.md` | Index of the application plan for state estimation and calibration: separate from the framework, with its own work streams |
 | `doc/optimisation-plan.md` | Findings in the RTT 2.x code and the order to fix them |
 | `doc/open-questions.md` | Everything not yet decided, the licence position, and what was assumed without verification |
 
@@ -137,6 +136,14 @@ Things to expect:
   and a short summary: `os: ...`, `extras: ...`, `cmake: ...`,
   `logger: ...`, `tlsf: ...`.
 
+## The application plan in `doc/estimation/`
+
+The estimator and calibration plan is about the application that runs on
+the framework, not about the framework. Keep it free of framework
+detail so that it can be moved to the application's own project: refer
+to `rtt3` only through the short list of requirements in its index, and
+put nothing in `doc/rtt3/` that only the estimator needs.
+
 ## Rules for `rtt3` design work
 
 These are decisions already taken; do not reopen them without being asked.
@@ -176,6 +183,9 @@ These are decisions already taken; do not reopen them without being asked.
 - **spdlog**: the queue implementation was checked in its source; the
   statement that message text is formatted in the calling thread was not.
 - **MuJoCo**: described from general knowledge only.
+- **The estimation and calibration plan**: standard practice applied to
+  the owner's description of the machine. No recording, sensor data
+  sheet or instrument was examined.
 - **SymForce and KDL**: described from general knowledge only. SymForce
   is the owner's planned generator for closed-form kinematics.
 - **Performance**: no benchmark has been run. Every expected gain and
