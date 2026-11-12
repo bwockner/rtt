@@ -172,8 +172,10 @@ first.
   the simulator, the file format, how manual observations are entered,
   what the total station exports, and who may invalidate an observation.
   See `estimation/calibration-data.md`.
-- **Contact detection**: wanted at least for sudden loss of contact and
-  overshoot compensation. Whether actuator pressures or currents are
+- **Contact detection**: wanted for sudden loss of contact with
+  overshoot compensation, and for a dozer blade passing over a hole so
+  that the body's later dip is anticipated. Which machine types are in
+  scope, and whether blade cylinder pressures are measured. Whether actuator pressures or currents are
   measured, how long and how large the first excursion is, how fast the
   actuators respond,
   whether labelled recordings exist, and whether the inertial rate can

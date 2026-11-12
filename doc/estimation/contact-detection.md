@@ -268,6 +268,133 @@ whether compensation is possible with the present sensors, possible
 with a faster inertial unit or pressure sensing, or better addressed by
 the detection-independent measures alone.
 
+## A second use: a dozer blade passing over a hole, and pre-empting the body's dip
+
+The owner's second example: a dozer's blade passes over a hole in the
+work surface, and the aim is to act before the feedback that arrives
+when the machine's body later dips into the same hole. This is a
+different problem from the sudden release above, and a much more
+favourable one for the ideas in this document.
+
+**The situation.** The blade is ahead of the tracks. It reaches the hole
+first: the material it was cutting or riding on is briefly absent, so
+its load and its support change. Some time later the front of the
+tracks reaches the same place and the body pitches into it. Because the
+blade is carried at the end of a long lever from the body's pitch axis,
+a small pitch of the body moves the cutting edge by a larger amount, and
+the blade gouges. Ordinary feedback corrects the blade from the body's
+measured pitch, which is after the body has moved and before the
+actuators have caught up.
+
+**Why this case is easier: there is time.** The delay between the blade
+crossing a point and the tracks reaching it is the distance between
+them divided by the speed: typically from a few tenths of a second to
+several seconds. That is one to two orders of magnitude more than the
+budget for a sudden release. Slow cues are therefore usable here,
+including the estimate of changed vibration behaviour, which was too
+slow to trigger anything in the first use.
+
+**The underlying idea: the machine drives on what its blade has just
+passed over.** The blade's own path is a preview of the surface the
+tracks are about to meet. Pre-emption is then not a special reaction to
+a hole but a general mechanism:
+
+1. *Remember the surface along the path.* A short profile of the
+   surface, indexed by distance travelled, covering the stretch between
+   the blade and the rear of the tracks. Its entries come from where the
+   cutting edge has been (the surface left behind) and from events
+   detected at the blade (a hole: where it started, where it ended, and
+   an estimate of how deep it remains).
+2. *Predict the body's motion over that profile.* The tracks rest on the
+   profile over their whole contact length, so the body's pitch and
+   height follow a smoothed version of it; a hole short compared with
+   the tracks is bridged, a long one is not. With the travel speed, this
+   gives the body's pitch and heave a short time ahead.
+3. *Correct the blade ahead of time.* The predicted effect of that pitch
+   and heave on the cutting edge is cancelled by a blade command issued
+   early enough for the actuators to follow.
+4. *Keep the feedback.* The prediction is imperfect, so the correction
+   from the body's measured pitch stays in place and handles what the
+   preview got wrong.
+
+**Detecting the hole at the blade.** In order of directness:
+
+- a drop in blade load (lift and tilt cylinder pressures, or draft force
+  where measured), and its return at the far edge;
+- a change in the estimator's actuation residual for the blade: the
+  blade moves more easily than the model in contact predicts;
+- the change in vibration behaviour of the blade and its arms when the
+  cutting edge is no longer supported, as evaluated in the first part of
+  this document. Here its latency is acceptable;
+- a small drop of the blade itself, if it was resting on the surface.
+
+The start and end of the event, placed along the path, give the hole's
+position and length. Position along the path should come from the
+locally consistent position output (`sensor-models.md`, GNSS), which
+does not jump when corrections change, with distance travelled taken
+from that and not from track speed, since tracks slip.
+
+**What makes the prediction uncertain.**
+
+- *Material falling in.* A blade carrying material partly fills the hole
+  as it passes. How much is unknown, so the remaining depth is
+  uncertain. The amount by which the blade's load falls and does not
+  recover is some indication of how much material was lost, and so of
+  how much the hole was filled. The pre-emptive correction is applied
+  with a gain below one in proportion to this uncertainty.
+- *Where across the machine.* The blade is wider than the track gauge
+  and its load is one number, or at best a left and right pair from the
+  tilt circuit. A hole may lie under one track, both, or neither. Pitch
+  from a hole under both tracks is predictable; roll from a hole under
+  one is much less so and is left mainly to feedback.
+- *Turning.* The tracks do not follow the blade's path exactly in a
+  turn. The profile is kept per track, and the kinematics place each
+  track on it.
+- *The blade not being loaded.* If the blade is carried above the
+  surface, it senses nothing. The earliest cue is then the body itself:
+  the onset of pitch as the front of the track enters the hole. The dip
+  develops over the time it takes the track to advance into it, so even
+  that onset, with the speed, allows the remainder of the motion to be
+  predicted from a model and partly anticipated.
+- *Ground behaviour.* Edges collapse and soft ground compacts under the
+  tracks, so the surface the tracks meet is not exactly the one the
+  blade left.
+
+**What it needs from the estimator.**
+
+- The base is a moving body with pitch, roll and height as states, with
+  the blade's position relative to it from the linkage kinematics.
+- A terrain profile as a fixed-size buffer along the path, one per
+  track, holding height and a confidence for each sample. It lives with
+  the estimator's state and involves no allocation.
+- The predicted terrain input also improves the estimator itself: a
+  pitch change that the motion model expects is tracked with less lag
+  than one that arrives as a surprise.
+- A model of the body on its undercarriage: at least the geometric
+  bridging over the contact length, and where it matters the pitch
+  dynamics of the machine on its tracks.
+
+**How it relates to the first use.** Both start from detecting that a
+tool has lost its support. In the first, the loss is the disturbance and
+the response must come within tens of milliseconds. In the second, the
+loss is information about a disturbance that will arrive later by a
+different route, and the response is planned over the intervening time.
+The detection can share its implementation; what follows it is
+different.
+
+**Assessment for this use.** Promising, and achievable with slow cues.
+The value comes mostly from the terrain memory and the prediction of
+body motion, which help with every irregularity the blade leaves or
+passes over, not only with holes. Blade load is the preferred detector
+where it is measured; the vibration-based cue is a usable alternative
+here, which it was not for the sudden release.
+
+**What to establish first.** From recordings of passes over known holes
+or steps: the delay between the event at the blade and the body's
+response, how well the body's pitch is predicted from a simple bridging
+model of the tracks on the recorded profile, and which blade-side signal
+marks the hole most reliably.
+
 ## Assessment
 
 - **Feasible as a supporting cue** for sustained, reasonably stiff
@@ -288,6 +415,11 @@ the detection-independent measures alone.
   the compensation needs, and confirmation afterwards. Detection has to
   come from actuator force, the tool link's acceleration, or the
   estimator's innovation, with a sequential change test.
+- **For anticipating the body's motion over a hole the blade has
+  passed**, the second stated use, the time available is long enough
+  for slow cues, and the vibration-based estimate is usable alongside
+  blade load. The larger gain there is from remembering the surface
+  along the path and predicting the body's motion over it.
 - **Cheap to find out.** Whether the effect is visible on this machine
   is answered by existing or easily made recordings, before anything is
   built.
@@ -325,4 +457,11 @@ the detection-independent measures alone.
 - Do recordings exist with periods of known contact?
 - Can the inertial sample rate be raised on the outer links, and is a
   small deliberate dither acceptable?
+- For the dozer case: are lift and tilt cylinder pressures measured?
+  How far ahead of the tracks is the cutting edge, and at what speeds
+  does the machine work? Is the body's pitch already fed back to the
+  blade, and from which sensor? Is a design or as-built surface model
+  available on the machine?
+- Which machine types are in scope? The examples so far imply both an
+  articulated chain of five or six links and a dozer.
 - Is the load on the tool known or estimated?

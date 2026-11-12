@@ -59,7 +59,7 @@ calibration data model.
 | [state-model.md](state-model.md) | Lie group states and error conventions; reduction to the true degrees of freedom; the gyroscope worked case; joint filter versus cascade | A1 |
 | [sensor-models.md](sensor-models.md) | Distance-dependent trust; link vibration; propagation delay and sampling; the 100 Hz inertial units and GNSS; accelerometer inclination and stillness; GNSS coloured noise; bias handling | A0, A2 |
 | [estimator.md](estimator.md) | The windowed solver; time grid and pre-integration; marginalising the oldest state; observability from curvature | A3, A4 |
-| [contact-detection.md](contact-detection.md) | Evaluation: inferring tool contact from changes in vibration behaviour, and the more direct alternatives | X1 |
+| [contact-detection.md](contact-detection.md) | Evaluation: inferring tool contact from changes in vibration behaviour, and the more direct alternatives; sudden loss of contact; a dozer blade passing over a hole and anticipating the body's dip | X1 |
 | [filter-numerics.md](filter-numerics.md) | **Deferred.** Cost and numerical form of Kalman-style updates; factored and mixed-precision forms. Reopened only if a higher sensor rate is adopted | X2 |
 | [calibration.md](calibration.md) | Parameter roles; batch calibration; external observations; single-joint sweeps; total station use; calibration without it; validation poses | A5, A6 |
 | [calibration-data.md](calibration-data.md) | Record types for observations; linked observations; surface offsets; plane heading and the "nothing moved" levels; dependency graph and invalidation | A5 |
@@ -87,6 +87,12 @@ These are not on the path to a working estimator and gate nothing.
 |---|---|---|---|
 | **X1** Contact detection | Evaluate whether free and contact conditions are distinguishable in the inertial data; for the stated use, sudden loss of contact and overshoot compensation, measure the time budget and which signals detect the release soonest; prototype off line; fuse with force and actuation cues | A0 for recordings; A2 for the vibration model | A go or no-go from recorded data, then a contact probability usable by A2 and A3 |
 | **X2** Filter arithmetic | Structure, factorisation and precision measures for a faster or larger filter | A decision to raise the inertial sample rate | Not scheduled |
+
+X1 covers two stated uses with very different time budgets: a sudden
+loss of contact, where the response must come within tens of
+milliseconds, and a dozer blade passing over a hole, where the body
+reaches the hole a second or so later and its dip can be anticipated
+from a remembered surface profile.
 
 X1 and X2 are linked: a positive result from X1, or a need for modal
 vibration states, is what would justify a higher inertial rate, and that
