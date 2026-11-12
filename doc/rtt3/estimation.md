@@ -1425,6 +1425,129 @@ discrete answer is needed, in particular for static calibration poses
 and zero-rate updates. Add mixture factors if bias estimation during
 operation needs the benefit of stillness without a prior decision.
 
+### Coloured noise in GNSS positions
+
+GNSS position errors persist: the error at one epoch is a good
+predictor of the error at the next. An estimator that treats each fix as
+an independent sample averages the error away far too quickly, reports a
+position uncertainty that is too small, and lets the slowly wandering
+error pull the other states with it. The following describes where the
+correlation comes from and the ways of correcting for it. It is from
+general knowledge of GNSS and has not been checked against the receiver
+in use.
+
+**Where the correlation comes from.**
+
+- *Multipath.* Reflections change only as the satellite geometry and the
+  antenna's surroundings change, so for a stationary antenna the error
+  varies over tens of seconds to minutes. On this machine the working
+  equipment is itself a moving reflector and obstruction, so the error
+  also depends on the machine's pose.
+- *The state of the carrier-phase solution.* A float solution converges
+  over minutes; a fixed solution has small, slowly varying residuals
+  from the atmosphere over the baseline to the reference station; a
+  code-only solution has metre-level errors correlated over many
+  minutes.
+- *Steps.* A change of fix type, or of the set of satellites used, moves
+  the position abruptly. This is not coloured noise but a jump, and
+  needs separate handling.
+- *The receiver's own filtering.* Many receivers output a position that
+  has already been through an internal filter with a motion model. Such
+  output is correlated by construction, and the correlation depends on
+  the receiver's dynamic-model setting. Feeding it to a second estimator
+  as independent measurements counts the same information repeatedly.
+  Where the receiver offers an unfiltered or per-epoch solution, that is
+  the one to use.
+- Vertical errors are typically larger and more strongly correlated than
+  horizontal ones, so the model is per axis in the local level frame.
+
+**Ways of correcting, compatible with the windowed estimator.**
+
+*1. An explicit slowly varying error state.* Each axis gets an offset
+that follows a first-order model with a correlation time and a
+stationary variance; the measurement is position plus offset plus white
+noise. In the graph the offsets at consecutive grid states are linked by
+the corresponding factor, or the offset is given sparse values in time
+like any slow quantity.
+
+- It makes the reported uncertainty correct even where the offset cannot
+  be separated from true position.
+- It can actually be estimated, and so removed, wherever something else
+  pins the position down: the machine standing still, the inertial
+  dynamics over short intervals, the kinematic constraints of the
+  mechanism.
+- Cost is three states per antenna.
+
+*2. Differencing consecutive measurements.* For an error that follows a
+first-order model with coefficient φ from one epoch to the next, the
+combination of the current fix minus φ times the previous one has white
+noise. That combination is used as the measurement, as a factor on the
+two states concerned. No extra states are needed, and the factor
+connects only adjacent states, so the structure of the problem is
+unchanged. It is equivalent to the first method with the offset
+eliminated, and is the cheaper choice when the offset itself is of no
+interest.
+
+*3. Split GNSS into what it does well at each time scale.* Changes in
+position over short intervals are far more accurate than position
+itself, because the slowly varying errors cancel. Where the receiver
+provides velocity from Doppler or carrier phase, that is used as a
+separate, nearly white measurement of motion, and the position only as a
+slow anchor with a long correlation time. This usually gives more than
+any refinement of the position noise model alone.
+
+*4. Inflation or decimation.* The simplest: enlarge the covariance by
+the factor that corresponds to the correlation time, or use one fix per
+correlation time. It keeps the uncertainty roughly honest and gives up
+the short-term information. Acceptable as a first step, not as the end
+state.
+
+**Handling the steps.** At a change of fix type the error process is
+restarted: the link between the offset before and after the change is
+given a large variance, so the jump is taken up by the offset and not
+smeared into the machine's position. The correlation time and variance
+then follow a table by fix type. A robust loss covers isolated bad
+fixes; it is not a substitute for the restart, because a step is not an
+outlier that goes away.
+
+**Using what this machine offers.**
+
+- *Stillness.* While the base is known not to move, the antenna's true
+  position is constant, so all variation in the fixes is error. The
+  offset is then observed directly. Averaging helps only as far as the
+  correlation allows: a still period shorter than the correlation time
+  yields roughly one independent sample, however many fixes it contains.
+- *Two antennas.* Errors common to both cancel in the baseline, so
+  heading from the baseline is much less affected by slowly varying
+  errors than position is. The remaining error is differential
+  multipath, with a shorter correlation time. The baseline therefore
+  gets its own, different noise model.
+- *Pose-dependent error.* When the working equipment is raised into an
+  antenna's view of the sky, multipath and blockage increase. The
+  covariance is raised as a function of the equipment's pose relative to
+  the antenna, which the kinematics already provide. A map of the effect
+  can be measured once per machine type.
+
+**Finding the parameters.** The correlation time and variance per axis
+and per fix type come from stationary recordings, by the autocorrelation
+of the position series, or against the total station as truth. As for
+the other noise parameters, they are fitted by likelihood, not by
+minimising residuals.
+
+**Checking that it worked.** If the model is right, the GNSS innovations
+are uncorrelated in time. Their autocorrelation at a few lags is a cheap
+running monitor: a clearly non-zero value says the remaining colour is
+being absorbed by some other state. The position uncertainty reported
+during a long still period should also level off at about the stationary
+size of the offset and not keep shrinking.
+
+**Suggested default.** An offset state per axis with correlation time
+and variance by fix type, restarted at fix changes; velocity used as a
+separate measurement where available; the offset anchored during
+stillness; covariance raised by equipment pose; the innovation
+autocorrelation as a monitor. Measurement differencing replaces the
+offset state if the extra states prove unwelcome.
+
 ### Keeping other errors out of the slowly varying biases
 
 **The mechanism.** A bias state is an integrator of the residual. Any
@@ -2794,6 +2917,11 @@ properties already have (`compile-time.md`).
   covariance factor) is the proposed way to use 32-bit lanes. What are
   the magnitudes and required resolutions of the states, and how long
   does the filter run without a reset? Those decide whether it is safe.
+- For GNSS noise: which receiver, and does it output a filtered
+  position or a per-epoch solution? Is velocity available? Which fix
+  types occur in practice, and how often do they change? Do stationary
+  recordings exist per fix type? Does the working equipment visibly
+  degrade the fix in some poses?
 - Gyroscope bias was previously left out of the estimation with good
   results (stated by the owner). Does "a degree over hours" describe
   the sensor's bias stability or the angle error after corrections?
