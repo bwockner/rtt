@@ -529,6 +529,134 @@ whitened residuals that remain after its correction should be closer to
 white than before, which is the direct measure that it removed
 structure and did not add any.
 
+## Deployment: from a GPU-trained network to a small function on the edge
+
+**Proposal from the owner:** convert networks trained on GPUs into
+Kolmogorov-Arnold networks (KAN) or radial-basis-function models,
+optimised for CPU inference on the embedded hardware. The assessment
+below is from general knowledge of these model classes; KAN in
+particular is recent, and claims made for it are still being tested in
+the literature.
+
+**What actually has to run on the machine.** The decomposition above
+makes this smaller than "a neural network". Each shared part is a
+function of a handful of dimensionless inputs, returning a bounded
+correction:
+
+- actuation: about four inputs (command, speed, load, temperature
+  fractions) and a few instance numbers;
+- soil: perhaps six to ten inputs describing the cut, the tool and the
+  material.
+
+The slowly varying quantities these depend on (an actuator's instance
+numbers, the soil properties of a place) do not need a neural encoder at
+run time. They are parameters, and the estimator already tracks
+parameters, with uncertainty and with the observability gating
+described in `estimator.md`. So the deployed model can be a **static
+function of few inputs plus estimator-tracked parameters**, with no
+sequence model on the machine at all. The large model trained off line
+exists to find the representation and to supply training targets; it is
+not what is shipped.
+
+That reframes the conversion: it is the fitting of a small,
+low-dimensional function to reproduce a large model's behaviour over a
+known, bounded input domain. Spline-based and radial-basis models are
+natural candidates for exactly that.
+
+**Speed is not the main reason.** At these sizes a small conventional
+network costs a few thousand multiply-adds per evaluation, which is
+negligible at 100 Hz on the target and would remain so at a kilohertz.
+If speed were the only concern, a small network with fixed-size weights
+in generated C++ would do. The reasons to prefer spline or radial-basis
+forms are their other properties.
+
+| Property | Why it matters here | Splines / KAN | Radial basis | Small conventional network |
+|---|---|---|---|---|
+| Behaviour outside the training domain | A residual should go to zero where nothing is known | Zero outside the grid if built so | Decays to zero away from the centres, by construction | Extrapolates arbitrarily |
+| Derivatives | The correction sits inside a factor, which needs its derivative with respect to inputs and parameters | Analytic and cheap | Analytic | Available, less smooth with piecewise-linear activations |
+| Bounded, checkable output | Acceptance in a control path | Can be verified on a dense grid in low dimension; bounds follow from coefficients | Same | Hard to bound tightly |
+| Shape constraints | A valve curve should be monotonic | Can be imposed on the coefficients | Awkward | Awkward |
+| Readability | Trust, and comparison with known curves | Each univariate function can be plotted; a deadband curve is literally one of them | Centres and widths are inspectable | Opaque |
+| Cost growth with input count | Soil has more inputs | Univariate pieces keep it moderate | Number of centres grows quickly with dimension | Mild |
+
+**Assessment of the two candidates.**
+
+- *KAN.* Its structure, sums and compositions of learned univariate
+  functions, matches the physics of the actuation part unusually well: a
+  valve characteristic is a univariate function of the command, scaled
+  by univariate functions of load and temperature. The univariate pieces
+  can be stored as small tables or low-degree splines with a fixed
+  number of operations per evaluation. Against it: the method is young,
+  training is less forgiving than for conventional networks, and it is
+  not established that it does better than a plain tensor-product spline
+  or a lookup table at this size.
+- *Radial basis functions.* The natural choice when "zero where there is
+  no data" is the property wanted most, which for a residual model it
+  is. Suitable for the low-dimensional parts. The number of centres
+  needed grows fast with the number of inputs, so it is a better fit for
+  actuation than for soil. A compactly supported basis avoids evaluating
+  exponentials and makes the cost and the support exact.
+
+**Simpler forms that the same pipeline should try first.**
+
+- *A lookup table with interpolation.* For up to three or four inputs
+  this is the long-established way engine and transmission controllers
+  carry calibrated non-linear maps: fixed cost, trivially bounded, easy
+  to inspect and to certify. For the actuation correction it may be all
+  that is needed.
+- *Tensor-product splines*, the smooth version of the same.
+- *A small quantised conventional network*, as the reference for
+  accuracy and cost.
+
+KAN and radial-basis models earn their place if they are measurably more
+accurate than a table of the same memory size, or stay accurate with
+more inputs than a table can handle.
+
+**The conversion pipeline.**
+
+1. *Fix the deployed function's signature*: its dimensionless inputs,
+   their ranges, its parameters and its output bound.
+2. *Generate targets* from the large model over that domain, sampling
+   densely where the machines actually operate and deliberately at the
+   edges, together with real data.
+3. *Fit the small model* to those targets, with the shape constraints
+   and with its output forced to zero at the boundary of the domain.
+4. *Verify*, which low dimension makes possible exhaustively: the
+   largest difference from the large model on a dense grid; output and
+   slope bounds; monotonicity where required; and accuracy against real
+   held-out data, not only against the teacher.
+5. *Export* the coefficients as constants in a generated block: a pure
+   function with fixed-size arrays, no allocation and a fixed operation
+   count, with its derivative generated alongside. The same generated
+   function runs in the simulator and on the target.
+6. *Record what it was made from*: the large model, the physical models'
+   version and the data, so that it is re-validated when any of them
+   changes.
+
+Because the exported function is plain arithmetic on constant tables, it
+can also be evaluated at compile time, which allows fixed test points to
+be checked in the build.
+
+**Where the sequence model goes.** If, after all, some quantity needs a
+learned summary of recent history at run time and cannot be carried as
+an estimator-tracked parameter, the same approach applies to a
+recurrence: a small state updated each step by a fixed function. That
+is harder to verify than a static function, because errors can
+accumulate through the state, and should be adopted only on evidence
+that the parameter route is insufficient.
+
+**Risks.**
+
+- *Fidelity.* The small model reproduces the large one only over the
+  sampled domain. The zero-outside property makes this safe but not
+  accurate; coverage of the operating domain has to be checked.
+- *Two sources of error.* The large model's error against reality and
+  the small model's error against the large one add. Validation is
+  against real data at the end, not against the teacher alone.
+- *Method maturity*, for KAN specifically.
+- *Temptation to skip the simple baseline.* If a table is enough, the
+  rest is unnecessary.
+
 ## Simpler alternatives that must be beaten
 
 A learned latent model is only worth its complexity if it outperforms
@@ -614,5 +742,8 @@ Steps 1 to 4 are worth doing regardless of the outcome of step 5.
   on machines that report commands?
 - Is a learned component acceptable in the control path at all, and if
   so at which of the five levels above?
-- Is there existing work or a preferred toolchain for training and for
-  generating inference code?
+- For deployment: is KAN or radial-basis conversion wanted for speed,
+  for verifiability, or for interpretability? Is a plain lookup table
+  acceptable where it suffices? What is the edge processor, and is
+  there an existing toolchain for training and for generating inference
+  code?

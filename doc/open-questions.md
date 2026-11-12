@@ -187,8 +187,9 @@ first.
   residuals of the kinematic and sensor models. Still open: which quantities are wanted,
   which tools and valve technologies are in scope, how many machines and how much data per type, whether one
   machine per type can be instrumented, how the lidar data is obtained
-  and time-stamped, and whether a learned component is acceptable in the
-  control path. See `estimation/learned-dynamics.md`.
+  and time-stamped, whether a learned component is acceptable in the
+  control path, and what the conversion to KAN or radial-basis models
+  for the edge is meant to achieve. See `estimation/learned-dynamics.md`.
 - **Generated kinematics**: SymForce is planned for closed-form
   kinematics. Which version, is generated code checked in or regenerated,
   which calculations stay on KDL, and what tolerance defines
