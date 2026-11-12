@@ -31,6 +31,11 @@ Stated by the owner; everything else in these documents is proposal.
   estimation has worked better than estimating it.
 - Eigen is the linear-algebra library; SymForce is planned for
   closed-form kinematics; the simulator is a block graph with MuJoCo.
+- There are many machine sizes, types and sensor stacks. Some machines
+  provide joystick input or pilot valve rates; main valve pressure or
+  force is rarely available. Lidar surface data exists for some
+  recordings. The examples given include an articulated chain and a
+  dozer.
 - A tracking total station with prisms is available; lock-on time is a
   problem; calibration without the instrument is a goal.
 

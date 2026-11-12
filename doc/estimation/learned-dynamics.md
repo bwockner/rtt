@@ -165,6 +165,135 @@ have absorbed the miscalibration.
   represent (load, contact with a rigid surface) and for testing the
   integration, not as the main source of training data.
 
+## The fleet as it is: many machines, uneven sensors, some lidar
+
+Stated by the owner: there are many machine sizes, types and sensor
+stacks. Some machines provide joystick input or pilot valve rates; main
+valve pressure or force is rarely available. Some training data could be
+augmented with surface data from lidar. This changes several of the
+judgements above.
+
+**What it strengthens.**
+
+- *The dimensionless formulation moves from useful to necessary.* With
+  many sizes, a model in physical units would have to be trained per
+  machine. Expressed in groups built from each machine's own lengths,
+  masses and natural time scales, one model can serve a family. This
+  needs those quantities recorded per machine: link lengths are known
+  from calibration; masses and inertias often only as nominal values,
+  which is usually enough to set the scale.
+- *The case for self-supervised pre-training.* The combination of a
+  large amount of unlabelled data, very few machines with a force
+  reference, and a wish to transfer between machines is the situation in
+  which pre-training pays. This is now a stronger bet than it appeared
+  for a single machine.
+- *Masked prediction fits uneven sensor stacks.* A model trained to
+  predict the representation of signals that have been hidden from it
+  treats a sensor that a machine does not have in the same way as one
+  that was masked in training. It can be trained on the union of all
+  sensors across the fleet and run on whatever subset a given machine
+  has. A supervised model with a fixed input list cannot.
+
+**What it requires of the model.**
+
+- *Inputs organised by sensor, not by position in a vector.* Each
+  sensor stream is an item with a description: what kind it is, which
+  link it is on, and where along that link in dimensionless terms. The
+  set of items varies per machine.
+- *A description of the machine as an input.* Dimensionless ratios of
+  its geometry and, where known, its masses, so that the model knows
+  what it is attached to.
+- *Probably one model per machine type, with shared parts.* An
+  articulated digging chain and a dozer are different mechanisms. What
+  can plausibly be shared across types is the low-level treatment of an
+  inertial stream on a vibrating link; what the whole machine is doing
+  is type-specific. Whether sharing helps is an experimental question.
+
+**Commands: present on some machines only.**
+
+- Joystick input or pilot valve rate is the operator's intent, upstream
+  of the valve's deadband and the hydraulics. That is the right input
+  for separating what was asked for from what happened, both for the
+  physical actuation factors (`calibration.md`) and for a learned model.
+- On machines without it, external effects cannot be separated from
+  intent by that route. The model can still be run, with the command as
+  a missing input, but what it can infer is less, and its uncertainty
+  should say so. Whether enough remains is to be measured, by training
+  with commands hidden on machines that have them.
+- Pre-training can use the command as one more signal to predict, which
+  pushes the latent state to hold what the command explains.
+
+**Force: rarely measured, so the few machines that have it are the
+reference.** The virtual-sensor route proposed above assumed a machine
+could be instrumented. Since pressure or force is rare:
+
+- the few machines that do report it are the labelled set, and
+  transferring from them to the rest is exactly what the dimensionless
+  formulation and pre-training are for;
+- temporary instrumentation of one machine per type remains the most
+  valuable single investment for this whole direction;
+- the fast detection of a sudden release (`contact-detection.md`) cannot
+  count on force and has to rest on the inertial units, with commands
+  where available.
+
+**Lidar surface data as a teacher.** Surface data that exists for part
+of the training data, and not on the deployed machines, is privileged
+information: used to train, not needed to run. It can serve in four
+ways.
+
+- *Labels.* With the kinematics, the surface gives the height of the
+  tool above it, hence contact or no contact and how far; the position
+  and size of holes and steps on the path; and, from the change of the
+  surface, how much material was moved, which bounds the load. These are
+  labels for the read-out stage that would otherwise need force sensors.
+- *A target for cross-modal prediction.* The model is trained to predict
+  a representation of the surface around the tool and under the tracks
+  from the machine's own sensors alone. To do that, its latent state has
+  to hold what the machine's motion reveals about the ground. This is a
+  natural use of a joint-embedding predictive setup, and it ties the
+  latent state to something physical without hand-made labels.
+- *A teacher for a student.* A model with access to the surface learns
+  the task; a second model without it learns to reproduce the first from
+  the on-board signals' history. This pattern is established in legged
+  locomotion, where terrain is known in training and has to be inferred
+  from the body's own sensors in use.
+- *Ground truth for the dozer terrain preview.* The remembered profile
+  and the predicted body motion (`contact-detection.md`) can be scored
+  against the measured surface, independently of any learning.
+
+Cautions for the lidar data:
+
+- It is one more sensor to calibrate: its mounting and its time offset
+  relative to the machine belong in the same calibration as everything
+  else (`calibration.md`), and errors there become label errors.
+- The surface a lidar sees is not always the surface that carries load:
+  loose material, dust, and the tool or blade hiding the point of
+  interest.
+- Labels derived from it are uncertain and should be used as soft
+  targets with that uncertainty, not as truth.
+- It covers only some machines and conditions, so the usual check
+  applies: performance on machines and sites that contributed no lidar
+  data.
+
+**What the data set has to record.** Training across a varied fleet only
+works if every recording says what it came from: machine type and size,
+the geometry and nominal masses used for scaling, which sensors were
+present and where, their calibration, whether commands, force or lidar
+were available, and the time base. This is the machine configuration
+record and the recording references of `calibration-data.md`, and the
+synchronised recording of stream A0. Without it the data cannot be
+pooled.
+
+**Revised assessment.** Given the fleet, the direction is more
+attractive than the first assessment allowed: dimensionless inputs are
+needed in any case, masked predictive pre-training is well matched to
+uneven sensor stacks and scarce labels, and lidar offers a physical
+training target that does not depend on force sensors. It remains
+research. The stopping rules stand, with one change: the comparison in
+step 5 should be made on transfer to a machine size and sensor stack not
+seen in labelled training, since that, and not accuracy on the training
+machines, is what the fleet needs.
+
 ## Simpler alternatives that must be beaten
 
 A learned latent model is only worth its complexity if it outperforms
@@ -232,12 +361,16 @@ Steps 1 to 4 are worth doing regardless of the outcome of step 5.
 
 - Which dynamic quantities are actually wanted, and for which of the
   uses (contact, overshoot compensation, terrain preview, load)?
-- Can one machine be fitted temporarily with pressure sensors or load
-  cells as a reference?
-- How much unlabelled recorded data exists, from how many machines and
-  variants?
-- How many machine sizes are in scope? The case for dimensionless
-  groups grows with that number.
+- There are many machine sizes, types and sensor stacks; commands on
+  some; force rarely; lidar surface data for some recordings (stated by
+  the owner). Roughly how many machines of each type, and how much
+  recorded data exists already?
+- Which machines report pressure or force, and can one machine per type
+  be instrumented temporarily?
+- Is the lidar mounted on the machines or is the surface surveyed
+  separately, and is it time-stamped against the machine's sensors?
+- Are nominal masses and inertias available per machine, or only
+  geometry?
 - Is a learned component acceptable in the control path at all, and if
   so at which of the five levels above?
 - Is there existing work or a preferred toolchain for training and for

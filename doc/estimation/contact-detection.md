@@ -445,8 +445,11 @@ marks the hole most reliably.
 
 ## Open points
 
-- Are cylinder pressures or motor currents measured? If so, vibration
-  is a secondary cue from the start.
+- Actuator pressure or force is rarely available, and commands
+  (joystick or pilot valve rate) only on some machines (stated by the
+  owner). So the fast cues are mainly inertial, with the actuation
+  residual where commands exist. On which machine types are commands
+  available?
 - Contact detection is wanted, at least, for detecting sudden loss of
   contact and compensating the overshoot (stated by the owner). How
   long does the first excursion take on the machine, and how large is
