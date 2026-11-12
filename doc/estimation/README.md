@@ -85,7 +85,7 @@ These are not on the path to a working estimator and gate nothing.
 
 | Stream | Content | Depends on | Outcome |
 |---|---|---|---|
-| **X1** Contact detection from vibration | Evaluate whether free and contact conditions are distinguishable in the inertial data; prototype off line; fuse with force and actuation cues | A0 for recordings; A2 for the vibration model | A go or no-go from recorded data, then a contact probability usable by A2 and A3 |
+| **X1** Contact detection | Evaluate whether free and contact conditions are distinguishable in the inertial data; for the stated use, sudden loss of contact and overshoot compensation, measure the time budget and which signals detect the release soonest; prototype off line; fuse with force and actuation cues | A0 for recordings; A2 for the vibration model | A go or no-go from recorded data, then a contact probability usable by A2 and A3 |
 | **X2** Filter arithmetic | Structure, factorisation and precision measures for a faster or larger filter | A decision to raise the inertial sample rate | Not scheduled |
 
 X1 and X2 are linked: a positive result from X1, or a need for modal

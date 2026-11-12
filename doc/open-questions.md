@@ -172,8 +172,10 @@ first.
   the simulator, the file format, how manual observations are entered,
   what the total station exports, and who may invalidate an observation.
   See `estimation/calibration-data.md`.
-- **Contact detection**: whether actuator pressures or currents are
-  measured, what contact detection is for and how fast it must be,
+- **Contact detection**: wanted at least for sudden loss of contact and
+  overshoot compensation. Whether actuator pressures or currents are
+  measured, how long and how large the first excursion is, how fast the
+  actuators respond,
   whether labelled recordings exist, and whether the inertial rate can
   be raised. See `estimation/contact-detection.md`.
 - **Generated kinematics**: SymForce is planned for closed-form
