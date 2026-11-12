@@ -203,11 +203,10 @@ judgements above.
 - *A description of the machine as an input.* Dimensionless ratios of
   its geometry and, where known, its masses, so that the model knows
   what it is attached to.
-- *Probably one model per machine type, with shared parts.* An
-  articulated digging chain and a dozer are different mechanisms. What
-  can plausibly be shared across types is the low-level treatment of an
-  inertial stream on a vibrating link; what the whole machine is doing
-  is type-specific. Whether sharing helps is an experimental question.
+- *Models divided by physical subsystem, not by machine type.* See the
+  next section: the owner's direction is that the soil model and the
+  actuator correction are independent of machine type, with the
+  machine-specific part carried by the mechanism model.
 
 **Commands: present on some machines only.**
 
@@ -294,6 +293,136 @@ step 5 should be made on transfer to a machine size and sensor stack not
 seen in labelled training, since that, and not accuracy on the training
 machines, is what the fleet needs.
 
+## Decomposition by physical subsystem, not by machine
+
+**Direction from the owner:** soil models should be independent of
+machine type, excavator or dozer alike, and so should the non-linear
+correction of the relation between valve command and acceleration.
+
+This is the right cut, and it gives the learned or identified parts a
+definite structure instead of one model per machine.
+
+**Three kinds of knowledge, kept apart.**
+
+| Part | What it describes | Specific to | How it is obtained |
+|---|---|---|---|
+| Mechanism | Geometry, masses, how forces at the tool and at the actuators become joint motion | The machine | Analytically, from the symbolic model (`kinematics.md`); not learned |
+| Actuation | How a valve command becomes actuator flow and force: deadband, flow curve, dependence on load and temperature, lag | The actuator technology, with a few numbers per actuator | Identified or learned once, shared by every actuator of that kind on every machine |
+| Soil | The force on a tool moving through material, and what happens to the material | The material and the tool's shape | Identified or learned once, shared by every machine |
+
+The mechanism model is what connects the other two: it maps the tool's
+motion into the frame in which the soil acts, maps the soil's force back
+to the joints, and combines it with the actuator forces and gravity.
+Because that connection is exact physics, the shared parts never need to
+know what machine they are on.
+
+**What makes a part machine-independent is its interface.** Each shared
+part is defined only in quantities that mean the same on any machine,
+made dimensionless.
+
+- *Soil.* Inputs: the tool's shape as a short description (width, the
+  profile of its cutting edge, its inclination), the depth of cut and
+  the tool's velocity relative to the surface, how much material it is
+  already carrying, and the properties of the material. Outputs: the
+  force and moment on the tool, scaled by the material's weight and the
+  cut's size, and the rate at which material is taken up or released.
+  Classical earthmoving mechanics already has this form, with
+  resistance expressed through a small number of soil properties and
+  dimensionless factors, which is a good starting structure for the
+  model and a baseline for a learned one.
+- *Actuation.* Inputs: command as a fraction of full stroke, speed as a
+  fraction of the actuator's maximum, load as a fraction of what the
+  supply can deliver, and temperature. Output: the correction to the
+  ideal relation, likewise as a fraction. The actuator's own size
+  enters only through the scales used to form those fractions.
+
+**Shared function, individual numbers.** "Independent of machine" does
+not mean identical for every instance. Each actuator has its own
+deadband width and gain; each site has its own material. The structure
+is a shared function with a small set of instance values:
+
+- for an actuator, a few numbers that are calibration parameters like
+  any other (`calibration.md`), fitted per actuator and tracked for
+  wear;
+- for soil, a few properties that vary from place to place and with
+  moisture, and are therefore a slowly varying quantity attached to
+  position on the site, not to the machine. They belong with the
+  remembered surface profile of `contact-detection.md`. Being tied to
+  place, an estimate made by one machine is usable by another working
+  the same ground, whatever its type.
+
+**How the parts can be told apart without force sensors.** Neither the
+actuator force nor the soil force is measured, and both act on the same
+joints, so from motion alone they are confounded. Three things separate
+them:
+
+- *Motion in the air.* With the tool clear of the ground the soil force
+  is zero by definition. Such data identifies the actuation model alone,
+  on every machine, with no reference sensor. This is the first training
+  stage and needs only commands and the inertial units.
+- *Contact data with the actuation model fixed.* What the identified
+  actuation and mechanism do not explain is then the soil.
+- *Different machines on the same ground.* The soil is common and the
+  actuators differ, so pooling machines constrains the split in a way
+  one machine cannot.
+
+Knowing which data is "in the air" needs the contact state, and the
+soil model needs the depth of cut. Both are exactly what the lidar
+surface data supplies in training: tool height above the surface, and
+how deep the cutting edge is below it. The lidar data is therefore more
+valuable for this decomposition than as a source of generic labels.
+Machines that do report pressure remain the direct check on the split.
+
+**Training through the physics.** Since the shared parts are joined by
+the analytic mechanism model, they are trained together through it: the
+predicted motion is compared with the measured motion, and the error is
+attributed to each part through the mechanism's known derivatives. The
+symbolic model provides those derivatives. This is the same structure as
+the calibration graph, with the shared functions' parameters as
+additional unknowns common to the whole fleet.
+
+**Where JEPA fits in this structure.** The latent state is given the
+same division: a part that sees only tool-frame quantities, meant to
+hold the state of the soil; a part per actuator that sees only that
+actuator's command and motion; and the mechanism between them. Limiting
+what each part can see is what keeps it from encoding the machine.
+Pre-training then serves to initialise those parts from unlabelled
+data, and the cross-modal target from lidar applies to the soil part.
+
+**The test that the cut is real.**
+
+- *Leave one machine type out.* Fit the soil model on dozers only and
+  evaluate on excavators, and the reverse. If the model is truly a model
+  of soil, it transfers. This is the single most informative experiment
+  in the whole direction.
+- *Agreement on shared ground.* Two machines of different type working
+  the same area should infer compatible soil properties.
+- *Actuation across machines.* A model fitted on some machines'
+  cylinders should predict another's after fitting only its few instance
+  numbers.
+
+**Limits to expect.**
+
+- Tool and soil do not separate perfectly. A blade pushing a growing
+  pile and a bucket filling are different interactions with the same
+  material; the tool description and the carried-material state have to
+  be rich enough to cover both, or the "soil" model will quietly learn
+  the tool.
+- Soil has history. Material that has been loosened or compacted behaves
+  differently, so its state changes with the work done on it, and the
+  place-indexed properties are not constant.
+- Actuation technologies differ. One shared function per valve and
+  circuit technology is more realistic than one for all hydraulics.
+- Without force, the separation rests on the in-air data and on
+  pooling. Where neither is good, the two parts will trade errors, and
+  the transfer tests are what reveal it.
+
+**A further use.** A soil model at this interface is also what the
+simulator lacks. As a block with the same signature, the identified
+model can supply tool forces in simulation, so that what is learned from
+the machines improves the simulation in which the next controller is
+tested.
+
 ## Simpler alternatives that must be beaten
 
 A learned latent model is only worth its complexity if it outperforms
@@ -371,6 +500,12 @@ Steps 1 to 4 are worth doing regardless of the outcome of step 5.
   separately, and is it time-stamped against the machine's sensors?
 - Are nominal masses and inertias available per machine, or only
   geometry?
+- Soil and actuation models are to be independent of machine type
+  (stated by the owner). Which tools are in scope (blade, bucket,
+  others), and which valve and circuit technologies? Do machines of
+  different types work the same ground, so that soil estimates can be
+  compared? Is there recorded motion with the tool clear of the ground
+  on machines that report commands?
 - Is a learned component acceptable in the control path at all, and if
   so at which of the five levels above?
 - Is there existing work or a preferred toolchain for training and for

@@ -65,7 +65,7 @@ calibration data model.
 | [sensor-models.md](sensor-models.md) | Distance-dependent trust; link vibration; propagation delay and sampling; the 100 Hz inertial units and GNSS; accelerometer inclination and stillness; GNSS coloured noise; bias handling | A0, A2 |
 | [estimator.md](estimator.md) | The windowed solver; time grid and pre-integration; marginalising the oldest state; observability from curvature | A3, A4 |
 | [contact-detection.md](contact-detection.md) | Evaluation: inferring tool contact from changes in vibration behaviour, and the more direct alternatives; sudden loss of contact; a dozer blade passing over a hole and anticipating the body's dip | X1 |
-| [learned-dynamics.md](learned-dynamics.md) | Evaluation: JEPA and dimensionless-group networks for dynamic quantities the kinematic model does not observe; simpler alternatives; where a learned part may attach | X3 |
+| [learned-dynamics.md](learned-dynamics.md) | Evaluation: JEPA and dimensionless-group networks for dynamic quantities the kinematic model does not observe; soil and actuation models shared across machine types, with the mechanism model between them; lidar as a training reference | X3 |
 | [filter-numerics.md](filter-numerics.md) | **Deferred.** Cost and numerical form of Kalman-style updates; factored and mixed-precision forms. Reopened only if a higher sensor rate is adopted | X2 |
 | [calibration.md](calibration.md) | Parameter roles; batch calibration; external observations; single-joint sweeps; total station use; calibration without it; validation poses | A5, A6 |
 | [calibration-data.md](calibration-data.md) | Record types for observations; linked observations; surface offsets; plane heading and the "nothing moved" levels; dependency graph and invalidation | A5 |

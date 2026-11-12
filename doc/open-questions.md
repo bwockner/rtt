@@ -182,8 +182,9 @@ first.
   be raised. See `estimation/contact-detection.md`.
 - **Learned dynamic information**: the fleet has many machine sizes,
   types and sensor stacks, commands on some, force rarely, and lidar
-  surface data for some recordings. Still open: which quantities are
-  wanted, how many machines and how much data per type, whether one
+  surface data for some recordings. Soil and actuation models are to be
+  independent of machine type. Still open: which quantities are wanted,
+  which tools and valve technologies are in scope, how many machines and how much data per type, whether one
   machine per type can be instrumented, how the lidar data is obtained
   and time-stamped, and whether a learned component is acceptable in the
   control path. See `estimation/learned-dynamics.md`.
