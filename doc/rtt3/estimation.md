@@ -1541,12 +1541,74 @@ being absorbed by some other state. The position uncertainty reported
 during a long still period should also level off at about the stationary
 size of the offset and not keep shrinking.
 
-**Suggested default.** An offset state per axis with correlation time
-and variance by fix type, restarted at fix changes; velocity used as a
-separate measurement where available; the offset anchored during
-stillness; covariance raised by equipment pose; the innovation
+**The actual situation: velocity is available, and carrier-phase
+corrections often but not always.** That settles the default and adds
+one design point.
+
+*Velocity carries the motion.*
+
+- GNSS velocity is a separate factor with nearly white noise. Its
+  accuracy depends little on whether corrections are being received, so
+  it is the measurement that stays good through a corrections outage.
+- The antenna's velocity is the base's velocity plus the rotation of the
+  structure acting on the antenna's lever arm. Predicted through the
+  kinematics, it also informs angular rate and, while the machine
+  translates, heading. For a single-antenna machine this is a second
+  source of heading in motion, beside horizontal acceleration. Direction
+  of travel alone does not say which way the machine faces: the sign
+  comes from the commanded direction or the inertial data.
+- Velocity and position reported by one receiver are not strictly
+  independent, since both come from the same signals and possibly the
+  same internal filter. Treating them as independent is the usual
+  approximation; the innovation monitor shows whether it is acceptable
+  for this receiver.
+- Velocity has its own latency, which is estimated like the other time
+  offsets.
+
+*Position is the slow anchor, with a quality that changes.*
+
+- The offset model's variance and correlation time follow the solution
+  type: small and short for a fixed carrier-phase solution, larger and
+  longer for float, largest for a solution without corrections. The age
+  of the corrections, where the receiver reports it, grades the
+  transition instead of making it a switch.
+- When corrections are lost, the estimate is carried by velocity and the
+  inertial sensors, and absolute position uncertainty grows towards the
+  uncorrected level. When they return, the offset process is restarted
+  as at any change of fix type.
+- A change of reference station is also a step and is handled the same
+  way.
+
+*What consumers see when corrections come back.* The absolute position
+estimate will move, possibly by decimetres, as the anchor regains its
+accuracy. For anything that controls motion relative to the machine or
+to recently visited points, such a jump is harmful and carries no
+information. The estimator therefore offers two position outputs:
+
+- a *locally consistent* one, driven by velocity and inertial data,
+  continuous by construction and accurate over short distances, which
+  drifts slowly in absolute terms;
+- a *globally referenced* one, which is the best absolute estimate and
+  may step when the anchor changes quality.
+
+The offset state is exactly the difference between the two, so this
+costs nothing extra. Which output a consumer uses is a statement about
+what it needs, and it is a property of the port it connects to.
+
+*Calibration and validation with a rover* need the fixed solution to be
+useful at the centimetre level. The fix type is already part of each
+observation record, and the session plan checks that corrections are
+available before scheduling rover observations.
+
+**Suggested default.** Velocity as a separate, nearly white measurement
+of the antenna's motion through the lever arm. Position with an offset
+state per axis whose variance and correlation time follow the fix type
+and the age of corrections, restarted at fix and reference-station
+changes, and anchored during stillness. Covariance raised by equipment
+pose. Two position outputs, local and global. The innovation
 autocorrelation as a monitor. Measurement differencing replaces the
-offset state if the extra states prove unwelcome.
+offset state if the extra states prove unwelcome, at the price of the
+two-output scheme.
 
 ### Keeping other errors out of the slowly varying biases
 
@@ -2917,11 +2979,13 @@ properties already have (`compile-time.md`).
   covariance factor) is the proposed way to use 32-bit lanes. What are
   the magnitudes and required resolutions of the states, and how long
   does the filter run without a reset? Those decide whether it is safe.
-- For GNSS noise: which receiver, and does it output a filtered
-  position or a per-epoch solution? Is velocity available? Which fix
-  types occur in practice, and how often do they change? Do stationary
-  recordings exist per fix type? Does the working equipment visibly
-  degrade the fix in some poses?
+- GNSS velocity is available and carrier-phase corrections often are
+  (stated by the owner). Which receiver, and does it output a filtered
+  position or a per-epoch solution? How long and how frequent are the
+  corrections outages, and does the receiver report the age of
+  corrections? Do consumers need a continuous local position, an
+  absolute one, or both? Does the working equipment visibly degrade the
+  fix in some poses?
 - Gyroscope bias was previously left out of the estimation with good
   results (stated by the owner). Does "a degree over hours" describe
   the sensor's bias stability or the angle error after corrections?

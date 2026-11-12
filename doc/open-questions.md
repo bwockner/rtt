@@ -136,10 +136,12 @@ first.
 - **Imperfect geometry**: tolerances or calibration accuracy of hinge
   axes and sensor mountings, rotation rates, and whether compliance is
   significant. See `rtt3/estimation.md`.
-- **GNSS coloured noise**: which receiver, whether its position output
-  is internally filtered, whether velocity is available, which fix types
-  occur, and whether stationary recordings exist to fit correlation
-  times. See `rtt3/estimation.md`.
+- **GNSS**: velocity is available and carrier-phase corrections often
+  are. Still open: which receiver and whether its position output is
+  internally filtered, how long and frequent corrections outages are,
+  whether the age of corrections is reported, and whether consumers need
+  a continuous local position, an absolute one, or both. See
+  `rtt3/estimation.md`.
 - **Gyroscope bias treatment**: proposed as a considered parameter,
   measured at stillness and not estimated, following the owner's
   experience that omitting it helped. Still open: what "a degree over
