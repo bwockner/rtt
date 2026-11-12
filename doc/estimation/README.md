@@ -50,6 +50,7 @@ Stated by the owner; everything else in these documents is proposal.
 | Calibration | The same factor graph, with each parameter given a role (fixed, considered, calibrated off line, tracked on line) |
 | Kinematics | Generated from one symbolic model; the planar restriction is an assumption on the model, not separate code |
 | Numerics | Performance first; agreement with the simulator within tolerance |
+| Learned models, if used | Trained only on the residuals of the kinematic and sensor models; soil and actuation parts independent of machine type |
 
 Proposed and awaiting confirmation: gyroscope bias as a considered
 parameter anchored at stillness; a GNSS offset state with two position

@@ -141,6 +141,10 @@ In increasing order of how much is entrusted to it:
 5. *As the process model itself.* Not proposed. It removes the structure
    that makes the estimator checkable.
 
+The owner's direction, recorded below under "Train only on what the
+known models leave unexplained", selects level 4: a residual on the
+physical models.
+
 A learned output is never used as evidence for calibration parameters
 without a guard, since a model trained on a miscalibrated machine will
 have absorbed the miscalibration.
@@ -422,6 +426,108 @@ simulator lacks. As a block with the same signature, the identified
 model can supply tool forces in simulation, so that what is learned from
 the machines improves the simulation in which the next controller is
 tested.
+
+## Train only on what the known models leave unexplained
+
+**Direction from the owner:** the kinematic chain and the other known
+relationships, such as the sensor models, are computed as priors, and
+the network is trained only on the residuals from those models.
+
+This settles the attachment level discussed above: the learned part is
+a residual on top of the physical models (level 4), and nothing else. It
+also fits the division by subsystem, because removing the machine's
+kinematics from the data is what leaves something machine-independent
+to learn.
+
+**What it buys.**
+
+- *The network does not have to learn geometry.* Everything the
+  symbolic model already explains exactly (how joint motion appears at
+  each sensor, lever arms, gravity, the Earth's rotation) is removed
+  before learning. The network's capacity and the data go to what is
+  actually unknown.
+- *Transfer across machines.* The kinematics are where machines differ
+  most. With them subtracted, what remains is closer to being the same
+  kind of signal on every machine.
+- *A safe default.* A residual of zero returns the system to the
+  physical model. Limiting the network's output limits its influence,
+  and switching it off is well defined.
+- *A meaningful scale.* A residual has an expected size from the noise
+  model. A network trained on whitened residuals sees inputs in units of
+  "how surprising", which is the same on every sensor and machine.
+
+**Which residual.** The choice matters more than the architecture.
+
+- *Prediction residuals, not post-fit residuals.* What the estimator has
+  left after its update has already been spread into the states and
+  whitened; the structure the network should learn is partly gone. The
+  target is the difference between the measurement and what the models
+  predicted before using it.
+- *Against the pure physical model, not against the corrected one.* If
+  the residual is defined relative to a model that already includes the
+  network's own correction, the target moves as the network trains, and
+  again when it is deployed. Defining it against the physical model
+  alone keeps the target fixed and makes recordings reusable.
+- *In the frame of the part that is to explain it.* For the actuation
+  part, the residual of each joint's response to its command. For the
+  soil part, the unexplained force on the tool, obtained by carrying the
+  joint residuals through the mechanism model into the tool's frame.
+  For the dozer, the residual of the body's pitch against the
+  terrain-bridging prediction. Each is then made dimensionless as
+  before.
+- *Useful raw residuals with the present sensors:* each inertial unit's
+  acceleration and rate minus the kinematic prediction; each joint's
+  achieved rate minus what the nominal valve relation gives for the
+  command; GNSS velocity minus the commanded travel, which is slip.
+
+**"Known relationships" should include the simple physical forms.** The
+priors need not stop at kinematics and sensors. A nominal valve curve
+with deadband, and the classical soil-resistance formula with a few
+parameters, are also known relationships. Fitting those first and
+learning the residual of *them* leaves the network a smaller and safer
+job, and gives the baseline of the stopping rules for free.
+
+**Pitfalls specific to learning from residuals.**
+
+- *Calibration errors look like physics.* A mounting misalignment or a
+  wrong link length produces a structured residual that depends on
+  pose. A network will learn it, and what it has learned is that one
+  machine's miscalibration, not soil or hydraulics. Two protections:
+  calibrate first, and check that the residual model cannot tell which
+  machine a sample came from. If it can, calibration error is leaking
+  into it. That check is also a sensitive calibration diagnostic.
+- *Slow states absorb what the network should see.* Any state that is
+  free to drift (a bias, a GNSS offset, a compliance coordinate) takes
+  up part of a persistent residual before the network sees it. This is
+  the leakage discussed for biases in `sensor-models.md`, and the same
+  discipline applies: keep such states tightly limited when producing
+  training residuals.
+- *Fitting noise.* A residual is mostly noise. Predicting its future
+  representation from its past, as in the JEPA setup, targets the part
+  that is predictable, which is the part worth having. A supervised
+  residual model needs explicit regularisation towards zero.
+- *The residual belongs to a version of the models.* Change the
+  kinematics, the sensor model or the noise model, and the residuals
+  change. A trained residual model is tied to the version of the
+  physical models it was trained against, identified by their hash, and
+  has to be re-validated when they change. The same generated functions
+  must be used to produce residuals in training and on the machine.
+- *Soil and actuation still share the residual.* Training on residuals
+  does not by itself separate them. The staging of the previous section
+  still applies: in-air data for actuation first, then contact data.
+
+**At run time.** The network's output is a correction to a prediction,
+with its own uncertainty, added inside the corresponding factor. It is
+limited in magnitude, reduced to zero when the input is unlike the
+training data, and the estimator's covariance is enlarged, not reduced,
+by an uncertain correction.
+
+**Testing.** Besides the transfer tests above: the system with the
+residual model must be no worse than without it on every held-out
+machine, and better on the conditions it was meant for; and the
+whitened residuals that remain after its correction should be closer to
+white than before, which is the direct measure that it removed
+structure and did not add any.
 
 ## Simpler alternatives that must be beaten
 
